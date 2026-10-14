@@ -4,7 +4,7 @@
 **Type:** RFC + implementation roadmap — authoritative starting point for the `crispy-companion` repo. Read first, then decide if we code.  
 **Outside the Crispy tree?** Yes — new repo `crispy-companion`. Crispy (webapp) will be updated later to speak this contract. Until then Crispy's `streamingServer.ts` is the interface spec, not work in flight.
 
-> **Scope in one line:** a headless Go daemon that fixes CORS for `<video>` playback and provides safe on-device torrent streaming via an embedded TorrServer engine. Logged-in Supabase users only. Windowless — pairing is a desktop notification gated by backend-verified identity. Linux/Flatpak first, Windows & macOS next, Android deferred.
+> **Scope in one line:** a headless Go daemon that fixes CORS for `<video>` playback and provides safe on-device torrent streaming via an embedded TorrServer engine. Logged-in users only. Windowless — pairing is approved in the logged-in webapp via crispy-server's device grant and confirmed with a desktop notification. Linux/Flatpak first, Windows & macOS next, Android deferred.
 
 ---
 
@@ -66,7 +66,7 @@ Stremio details are in the extended design brief (provenance: `stremio-runtime` 
 | G1 | Fix CORS/mixed-content for Crispy webapp playback (HTTPS page ↔ loopback shim) |
 | G2 | Provide torrent playback through a locally-cached BitTorrent engine (`TorrServer`) |
 | G3 | **Windowless** companion — no persistent settings GUI; only a desktop notification and a pairing token file |
-| G4 | Logged-in users only (pairing requires a verified Crispy/Supabase identity; unauthenticated `GET`s are never elevated) |
+| G4 | Logged-in users only (pairing approved from a logged-in Crispy account via crispy-server's RFC 8628 device grant; unauthenticated `GET`s are never elevated) |
 | G5 | Safe by default on loopback; explicit approval for first use, token-required thereafter |
 | G6 | Opt-in shared access over the LAN/Internet, **identity-verified and wire-secure** |
 | G7 | Single Go module, cross-buildable for Flatpak / Windows / macOS; Android deferred |
@@ -89,7 +89,7 @@ Stremio details are in the extended design brief (provenance: `stremio-runtime` 
      (HTTPS)   │   + AuthContext/Supabase session                               │
                 └──────────────┬────────────────────────────────────────────────┘
                                │ probe → ping
-                               │ pair → /handshake (Supabase access token)
+                               │ pair → /pair (RFC 8628 via crispy-server)
                                │ API → /{infoHash}/create, …/stats.json  (token header)
                                │ media → /{infoHash}/{fileIdx}?token=…       (query token)
                                ▼
@@ -99,7 +99,7 @@ Stremio details are in the extended design brief (provenance: `stremio-runtime` 
                 │  ┌─────────────────────────────────┐  │  engine flags,
                 │  │ middleware: CORS/Host/Sec-Fetch │  │  WAF templating
                 │  │ rate-limits, single-pendingPair │  │
-                │  │ pairing-verifier → Supabase Auth │  │
+                │  │ device-grant poller → web server │  │
                 │  │ notifications (OS portal)        │  │
                 │  └──┬───────────────┬──────────────┘  │
                 │     │               │                  │
@@ -128,7 +128,7 @@ Version `protocol = 1` (advertised in `/companion/ping`). `companion/` endpoints
 | Route | Purpose | Auth | CORS |
 |---|---|---|---|
 | `GET /companion/ping` | Probe/discovery — `{name:"crispy-companion",version,protocol,requiresLogin:true,paired:bool}` (last field UX-only, low sensitivity) | none | CORS on, public info only |
-| `POST /companion/handshake` | Pairing. Header `Authorization: Bearer <supabase access token>` + `X-Crispy-Client`. Body `{device_name?:string, client:"crispy-web", version?:string}` | Origin + Host + Sec-Fetch validated; rate-limited | CORS: canonical origins only |
+| `POST /companion/pair` | Start pairing (RFC 8628 bootstrap via crispy-server). Header `X-Crispy-Client`. Returns `{pendingPairId, verificationUrl}`. Contains no identity secrets either way. | Origin + Host + Sec-Fetch validated; rate-limited | CORS: canonical origins only |
 | `GET /companion/status` | `{paired, mode, engineOk, pairingState:"idle"|"pending", pendingFor?}` | token | CORS: canonical origins only |
 | `POST /companion/revoke` | Revoke own token / sign out companion from this browser | token | same |
 | `POST /{infoHash}/create` | Stremio-compatible (payload left Stremio-compatible; body `{token?}` accepted but header wins). Triggers engine add. | token (header) | same |
@@ -141,24 +141,40 @@ Version `protocol = 1` (advertised in `/companion/ping`). `companion/` endpoints
 
 ### 5.2 Pairing sub-protocol
 
+Pairing rides crispy-server's **existing RFC 8628 Device Authorization Grant** (`crispy-server/src/modules/auth/device-authorization.service.ts` — the flow already powering TV login). No Supabase session token ever crosses the origin → local-process boundary.
+
 ```
-browser            shim                Supabase Auth
-  │ "Allow ?"  POST /handshake+Bearer │                    CORS-locked to crispy.app:* origins
-  │────────────►│                     │                    + Host 127.0.0.1 / localhost only
-  │             │  POST GET /auth/v1/user?apikey=&Bearer
-  │             │────────────────────►│  200 {user_id,email,display_name} or 401
-  │             │ pendingId = random  │                    pendingTTL≈60–120s
-  │             │ single-pending window                   (replaces any old pending)
-  │             │ desktop notification: Allow `alice@e.com` to pair? [Allow][Deny]
-  │◄──202 {status:"pending", pendingId}                    (client polls /status)
-  │[Allow click on OS notification carrying pendingId]
-  │             │ generate companion API token (≥128-bit URL-safe base64)
-  │             │ store {token → {user_id,email,device_name,createdAt}}
-  │◄──200 {status:"approved", token}                       delivered CORS-locked
-  │ store in localStorage → all API calls auth-header, <video> ?token=
+webapp (logged in)      companion (127.0.0.1:11470)      crispy-server (HTTPS)
+       │ POST /companion/pair            │
+       │────────────►│ POST /v1/auth/device/authorize    │
+       │             │ {clientId:"crispy-companion",     │  (public endpoint,
+       │             │  deviceName:"DESKTOP-AB12"}       │   no credentials)
+       │             │◄── userCode, deviceCode,          │
+       │             │    verificationUriComplete        │
+       │◄─200 {status:"pending", verificationUrl,        │
+       │       pendingPairId}            │               │
+       │ renders in-app approval card:   │               │
+       │ "Approve Crispy Companion on    │  POST /v1/auth/device/verification
+       │  DESKTOP-AB12? Signed in as     │  POST /v1/auth/device/verification/approve
+       │  alice@example.com [Approve]"   │──────────────►│  (user Bearer — server knows
+       │                                 │               │   the account; verified identity)
+       │ (polled) GET /companion/status  │               │
+       │◄─{pairingState:"pending"}       │ POST /v1/auth/device/token (poll per interval)
+       │                                 │◄─ status:"approved" + cp_pat_ device token + user
+       │                                 │ 1. stores cp_pat_ + deviceId (server session)
+       │                                 │ 2. mints LOCAL companion API token (≥128-bit)
+       │                                 │ 3. tokens.json: localToken → {userId,email,deviceId,pairedAt}
+       │                                 │ 4. desktop notification: "Crispy Companion
+       │                                 │    paired for alice@example.com [Revoke]"
+       │◄─ status poll: {paired:true, token:<localCompanionToken>, user:{...}}
+       │ stores local token → API calls auth-header, <video> ?token=
 ```
 
-409 if another pairing is pending; 429 on handshake rate; expiry returns 410. Approval and deny are OS notification **actions** carrying `pendingId` — third-party pages can't forge them (they're notification-center → `D-Bus` → app callbacks, not HTTP).
+Rules (invariants unchanged): one pending pairing per companion; server-side TTL ≈15 min for codes, ≈90 s exposed pair-init window; 409 while pending; 429 on init rate (≤5/min/IP); 410 after expiry. The **approval gate lives in the logged-in webapp** — the server authenticates the approver, so the displayed identity is verified by construction; this is strictly stronger than forwarding any token to the local process. The desktop notification becomes a **confirmation with a Revoke action** — not the gate — which also removes OS notification-button plumbing from the pairing critical path. Third-party pages get nothing: `verificationUrl` never leaves CORS/Host/Sec-Fetch-locked responses (T1), and approval itself requires a server-authenticated session.
+
+Revocation: server-side `DELETE /v1/auth/devices/{deviceId}` revokes the device **and** its `cp_pat_` in one transaction (already implemented). The companion lazily re-validates its `cp_pat_` against the server; a 401 on any device-scoped call ⇒ wipe local tokens, notify, and Crispy shows a re-pair prompt. The Crispy settings "connected devices" UI (`GET /v1/auth/devices`) covers companions for free.
+
+Server-side change required (small): add `"crispy-companion"` to `DEVICE_AUTHORIZATION_CLIENT_IDS` (currently `['crispy-tv']` in `device-authorization.service.ts`) and persist `deviceType: 'companion'` on the device row. **No new endpoints.**
 
 ### 5.3 TorrServer mapping (what ships in M3, spikes in M0)
 
@@ -196,8 +212,8 @@ browser            shim                Supabase Auth
 - **Token, constant-time** — per-pairing URL-safe base64 `≥128b` via `crypto/rand`; `subtle.ConstantTimeCompare` on check. Header `Authorization: Bearer …` for API; `?token=` only accepted on media (de-scoped blast: one endpoint).
 - **Listener hygiene** — fixed port `:11470` displacing Stremio is intentional (Stremio-server-go precedent); add `SO_REUSEADDR/REUSEPORT` off and loud failure if shadowing would occur.
 - **Pairing-window discipline** — one pending per instance, `pendingTTL` 60–120 s, rate-limit (`≈5/min/IP` on handshake, `429`), notification action carries `pendingId`, approve does not tag `CORS: *` onto token issuance.
-- **Verify Supabase access tokens via backend** (`GET /auth/v1/user`), no JWT-secret in artefact, single-use then discarded. Never logged. Stored only `user_id/email ↔ companion token`.
-- **Log redaction** — never log raw bearer tokens, Supabase access tokens, or full query media tokens. Redact in any pii-limited dump.
+- **Identity via server-side device grant** (crispy-server RFC 8628; §7) — the companion never receives nor verifies a bearer session token. The server mints a device-scoped `cp_pat_` only after logged-in approval; the companion separately mints its local token. No JWT secrets in the artefact.
+- **Log redaction** — never log raw bearer tokens (local companion tokens, `cp_pat_`), or full query media tokens. Redact in any pii-limited dump.
 - **No ambient auth** — no cookies anywhere.
 
 What is explicitly **not** promised: protection from a compromised local user account, from injected XSS on the canonical web origins (which would already steal session tokens), or from peer-supplied byte-level corruption beyond the engine's own piece verification.
@@ -206,13 +222,14 @@ What is explicitly **not** promised: protection from a compromised local user ac
 
 ## 7. Pairing & identity in detail
 
-- **Backend is Supabase Auth** (`supabase.auth.getSession()` on the webapp side). Companion is given the canonical `${VITE_SUPABASE_URL}` anon-key-pair baked at build (with an `allowedSupabaseUrls` config overlay for self-hosters).
-- **Verification path (v1):** remote-call `GET ${SUPABASE_URL}/auth/v1/user?apikey=${anonKey}` with `Authorization: Bearer <supabaseAccessToken>`. Future optimisation (JWKS-local verify) is additive; HS256 secret distribution is explicitly rejected for production builds.
-- **Stored state:** `tokens.json` (0600) — map `companion_token → {user_id,email,name,createdAt,lastSeenAt,deviceName?}`. Revoke deletes entry; no automatic expiry on `companion_token` (user-initiated revoke is the contract; refresh via re-pairing).
-- **Policies enforced by companion:**
-  - Default for **new** pairings when backend verification is unreachable: **fail-closed** (410 "cannot verify identity — retry"). Existing tokens keep working offline. Config knob: `pairing.requireOnlineVerification` (default `true`) with a logged warning if flipped off.
-  - **Logged-out browsers** cannot pair (no Supabase token); pairing 401 prompts sign-in.
-  - Self-hosters running a different Supabase: origin allowlist and `supabaseUrl/anonKey` become effective config; verify still calls the configured Supabase.
+- **Identity broker: crispy-server** (the full backend we own), via its already-implemented RFC 8628 device grant. The companion is treated exactly like a TV: an untrusted, inputless device that a logged-in browser approves. Supabase remains the session issuer *inside* the canonical webapp + server trust boundary; it never reaches the companion.
+- **What crosses the loopback boundary:** only a short-lived, context-free *pairing intent* (the verification URL) from companion → browser, and a locally-minted companion token from companion → browser **after** server-confirmed approval. No Supabase access/refresh tokens and no `cp_pat_` ever transit the browser↔companion channel (the `cp_pat_` travels TLS-direct server → companion).
+- **Stored state:** `tokens.json` (0600) — `localCompanionToken → {userId, email, deviceId, pairedAt, lastSeenAt}`; `device-session.json` (0600) — `cp_pat_` + `deviceId` for server calls (identity re-assertion, revocation checks). Revoke = delete local token; server revoke additionally invalidates the `cp_pat_`, which the companion detects and honours.
+- **Enforcement policies:**
+  - New pairing requires online reachability of crispy-server (**fail-closed**, D8); existing local tokens keep working offline.
+  - Logged-out browsers cannot pair — approval endpoints require the user Bearer; the webapp shows "Sign in to enable companion".
+  - Self-hosters re-point `crispyServer.url`; the same grant must exist server-side (it does, modulo the clientId allowlist).
+- **Why not forward Supabase access tokens** (earlier draft mechanism, superseded): forwarding a live session credential to *any* local process swaps a contained web-session credential for a listener-identity problem (anything squatting `127.0.0.1:11470` first could harvest it), widens the token's exposure surface, and yields no server-side revocation or device inventory. The device grant inverts all three: the **server** mints a narrow device token only after user approval, and revocation is one `DELETE` away. A "verify a caller-supplied token via Supabase `/auth/v1/user`" adapter remains possible internally for exotic self-hosts but is **not** the production path.
 
 ---
 
@@ -269,9 +286,9 @@ pairing.pendingTTLSeconds = 90
 pairing.singlePending = true  # always true; not knob
 pairing.maxAttemptsPerMinute = 5
 
-[supabase]
-url  = "${CANONICAL_SUPABASE_URL}"
-anonKey = "${CANONICAL_SUPABASE_ANON_KEY}"  # anon only, safe to ship
+[crispyServer]
+url = "${CANONICAL_SERVER_URL}"        # e.g. https://api.crispy.example
+clientId = "crispy-companion"          # must be allowlisted server-side (RFC 8628)
 
 [shared]
 mode = "off"                  # off | tsnet | raw
@@ -346,7 +363,7 @@ Env overrides mirror leaves (e.g., `CRISPY_COMPANION_LISTEN_PORT`).
 │  ├─ config/
 │  ├─ engine/                 # torrserver lifecycle + mapping
 │  ├─ httpx/                  # CORS/Host/Sec-Fetch, auth, rate-limits
-│  ├─ pairing/                # Supabase verify + pairing window + tokens
+│  ├─ pairing/                # device-grant poll + pairing window + tokens
 │  ├─ notify/                 # per-OS portal/toast impls
 │  ├─ tsnode/                 # tsnet integration (opt-in)
 │  └─ proxy/                  # media passthrough + stats derivation
@@ -374,7 +391,7 @@ Deps (candidate, pinned, no brokers):
 > "Server will be updated later to support this local companion" — **these are real work items, spelled out here as interface requirements, but executed in the `crispy` repo**. File them as `crispy:companion-support` (logged-in-only) issues.
 
 1. **Probe & prefs:** `GET http://127.0.0.1:11470/companion/ping` on page load (1–2 s timeout). Settings → Advanced: companion URL (default `127.0.0.1:11470`) + status dot (grey/green/pending) + "Pair companion" button.
-2. **Session wiring:** on pair, call `POST /companion/handshake` with `Authorization: Bearer <supabase access token>` (from `supabase.auth.getSession()`). Own UI prompts "Check your desktop notification". Poll `GET /companion/status` until `200 {approved, token:…}` or timeout; store companion token in `localStorage` scoped to origin.
+2. **Pairing wiring:** "Pair companion" → `POST /companion/pair` → render verification card (reuse the TV device-approval pattern; server endpoints `POST /v1/auth/device/verification` and `…/approve`) showing device name + signed-in account → on Approve, the companion's server-side poll resolves → `GET /companion/status` flips to `{paired:true, token:…}` → store the **companion local token** in `localStorage` scoped to origin. A confirmation desktop notification lands on the machine (Revoke action available); it is informational, not the gate.
 3. **Worker edits (§5 contract):**
    ```ts
    // src/worker/handlers/streamingServer.ts: add
@@ -397,7 +414,7 @@ Deps (candidate, pinned, no brokers):
 |---|---|---|
 | **M0 — Spikes (throwaway, branch-local)** | Drive TorrServer locally (`/torrents` `action=add/get`, `/stream?link=&index=&play` range, `/cache/state`) against multiple `Range:` headers; deliver `<video>` PASSTHROUGH latency note. Mixed-content/PNA matrix: Chrome/Firefox/Safari over canonical HTTPS origin → `http://127.0.0.1:11470` with/without `Allow-Private-Network`. Flatpak portal notification-actions probe on sample app | `docs/spikes/M0-notes.md` written; `streamProgress → ready` mapping documented; PNA-required headers enumerated |
 | **M1 — Skeleton (builds & registers)** | Go project init, config loader (§9), logging (redacted), listeners hygiene §6, engine lifecycle (spawn/monitor torrserver), `GET /companion/ping` + `GET /healthz`, CORS/Host/Sec-Fetch middleware on allowed origins | `go test ./…` + `make {lint,vet,build}` green; `curl -v` probe matrix matches §10 preflights; mixed-content player stability on canonical HTTPS origin |
-| **M2 — Pairing + auth** | Supabase verifier (§7), single-pending state machine, desktop notifications per-OS, persistent `tokens.json:token→user` store, auth middleware (header wins), `POST /companion/handshake` + `GET /companion/status` + `POST /companion/revoke`, rate-limits, 401/403/409/429 typed | Logged-in Crispy browser sees one notification → Approve → next companion call succeeds as `alice@…`. `evil.com` logged-in as other user shows other identity (proof of verification). CORS-locked issuance never exposed to `evil.com`. Unpaired `POST /…/create` → 401 |
+| **M2 — Pairing + auth** | Device-grant poller (§5.2/§7; crispy-server `crispy-companion` clientId), single-pending state machine, confirmation notifications per-OS (no approvals via notification), persistent `tokens.json` + `device-session.json` stores, auth middleware (header wins), `POST /companion/pair` + `GET /companion/status` + `POST /companion/revoke`, rate-limits, 401/403/409/410/429 typed | Logged-in Crispy browser initiates pair → approves in the signed-in in-app card (`alice@…`) → companion receives approval via crispy-server poll → subsequent calls succeed with the local token. Pairing URL never leaves CORS-locked origin (T1 proof). Unpaired `POST /…/create` → 401. Server-revoked device → 401 on next re-validation |
 | **M3 — Streaming contract** | Stremio-compatible create/stats (5 % gate honoured, field mapping from engine), media proxy (`Range`/`If-Range`/`HEAD`→`206`), fan-out limits, log redaction on media keys | Existing Crispy torrent UX plays against `:11470` as it played against Stremio (seek + resume + head-request parity) on canonical origin; torrent from magnet supplied by Crispy metadata resolves inside companion against real tracker/peers |
 | **M4 — Packaging (primary: Flatpak; within—zip for Win/mac drafts)** | Flatpak manifest + portal notification/BG; Windows zip + HKCU autostart; macOS `LaunchAgent` draft | `flatpak build && flatpak run io.crispy.Companion` loopback is default; system notification action pair works on Flatpak/Linux first; win/mac "pair via file-approved fallback `crispy-companion pair show/approve`" path functional |
 | **M5 — Shared mode** | `tsnet` (opt-in `shared.mode=tsnet`) `ListenTLS` auto-certs + second surface on `tailAddr:443`; raw-LAN `listenAddr` explicit-warning | Phone/tablet/TV browser on canonical origin pairs and plays via tsnet; raw LAN with warning text; `WHOIS` logged as second leg where tsnet is used |
@@ -409,7 +426,7 @@ Deps (candidate, pinned, no brokers):
 ## 16. Testing & verification matrix
 
 - **CORS matrix (actual, browser-driven):** canonical origins × (`GET`/`POST` +custom header) × (`no-cors` `<video>` GET) against `FetchMode=cors|samesite=no-cors` in Chrome/Firefox/Safari/Edge × `Origin: allowed | disallowed | absent` × rebind Host override → must return pass/fail as §10 dictates. Automated via `internal/httpx_test.go` + a tiny e2e harness serving a real `https://*.test` origin (or canonical domain draft).
-- **Pairing gates:** rate-limit trip, single-pending FIFO, `pendingId` action binding, expiry 410, lookalike `supabase` verify (`alice@other` → shows other), logged-out 401, backend unreachable 503, revoked token 401.
+- **Pairing gates:** rate-limit trip, single-pending FIFO, server TTL/expiry 410, identity assertion via server (approval by `alice@…` yields an alice-marked device + confirmation; a different approver yields a different, honestly-shown identity), logged-out 401, crispy-server unreachable → fail-closed for new pairings, revoked device → 401 on next re-validation.
 - **Proxy:** `Range:` passthrough ↔ TorrServer `stream` (0-0, open-ended, out-of-bounds), `HEAD`, abort-by-close, `If-Range`, `206`/`200` semantics.
 - **Flatpak sandbox:** FS-leak checks (no `home:` readable), port binding at `:11470` owned by shim, engine at `:8090` never externally reachable, portal notification actions promotion.
 - **Windows/macOS smoke** (installed): autostart toggle, kill + restart, notification click-through.
@@ -433,7 +450,7 @@ Deps (candidate, pinned, no brokers):
 |---|---|---|
 | Canonical web origins drift (canonical deployment vs self-hosted forks) | CORS allowlist diverges | `allowedOrigins` config override (with config-override shape, explicit deny on `*`), validated against. Ship defaults match canonical deployment. |
 | Desktop notification with actions unshipable early on platform | Pairing ritual blocked | Fallback: `crispy-companion pair show|approve <pendingId>` CLI + token file print; notification action is the head, CLI path is the tail. Both share `pendingId`. |
-| Supabase API shape / key rotation | Verify path breaks | `anonKey` pin + fallback `JWKS` path spec-ed and sized; run in CI against anonymized verify (`401` expected ≠ 500). |
+| crispy-server grant drift (clientId allowlist, envelope shapes) | Pairing path breaks | Versioned server contract (`protocol=1` fields), CI contract test against anon calls (`401`/`authorization_pending` expected, not 500), server-side change landed before companion M2 acceptance |
 | TorrServer API / binary shape drift | Mapping breaks | Version-pinned bundle + `engine_tests` soak; `M0` spike kept alive as integration suite |
 | PNA / mixed-content in-browser policy changes | Shim's CORS breaks as default | `M1` spike matrix re-run per major browser; CORS matrix tested in CI against headless Chromium (canonical origin drift path for CI branch). |
 | Sign-notarized builds missing early | Windows Defender / Gatekeeper friction | Zip-prototype path ships first; `MSI`/signed notarized binary paths reserved (missed milestones list them as wonk). |
@@ -446,15 +463,16 @@ Deps (candidate, pinned, no brokers):
 |---|---|---|---|
 | D1 | Language: Go. | Single static artefact cross-builds Flatpak/Win/mac; `tsnet` is Go-native; media proxy's `net/http` fits. Confirmed by user. | **Locked** |
 | D2 | Companion is windowless (no settings GUI). Management = headless + TorrServer web UI on loopback internally. | Per user: no extra companion complexity. | **Locked** |
-| D3 | Paired only if Supabase-verified. Logged-in users only. | Per user: "app only caters logged in users" + backend-verified notification anti-spoof fix (§7). | **Locked** |
-| D4 | Pairing ceremony: **explicit desktop notification, Approve, identity backend-verified** (not silent TOFU, not code-in-browser). | Per user: "explicit notification is better … we can show a user name based on that token". Mitigates pairing-window hijacks, makes shared-mode pairings readable. | **Locked** |
+| D3 | Paired only if server-verified. Logged-in users only. | Per user: "app only caters logged in users". Mechanism superseded by D12 (was: companion forwards caller's Supabase token to `${SUPABASE_URL}/auth/v1/user`). | **Locked (mechanism via D12)** |
+| D4 | Pairing ceremony: **explicit approval showing backend-verified identity** (not silent TOFU, not code-in-browser). | Per user: "explicit notification is better … we can show a user name based on that token so the approve notification cant trick the user". Mitigates pairing-window hijacks. Mechanism superseded by D12: approval gate moved from OS notification to logged-in webapp (stronger verification); notification kept as confirmation + Revoke. | **Locked (mechanism via D12)** |
 | D5 | CORS is not authentication: pairing ceremony never relaxes CORS to `*` (Stremio comparison closed). | Confirmed: Stremio's `Access-Control-Allow-Origin: *` is not the model. Allowlist §6 is the perimeter, token is the gate. | **Locked** |
 | D6 | Engine always loopback; shim is only exposed surface. TorrServer `shared` never opens a second Host. | Safety by construction. | **Locked** |
 | D7 | `tsnet` as headline for shared mode (with raw-LAN warned fallback). | Makes LAN both secure and zero-firewall; optional. | **Planned (default rec)** |
 | D8 | Default pending policy for new pairings when backend unreachable: **fail-closed** (410/ph). | User: logged-in-only already; paired tokens keep working offline. `pairing.requireOnlineVerification` baked in, flip-off requires user's act. | **Planned (default rec — confirm at kick-off)** |
 | D9 | Android via `gomobile bind` → foreground service deferred to `M6`. | Prior-art path exists; would need new app-review attestation + wakelock policy. TorrServe covers engine-only in interim. | **Deferred** |
 | D10 | Flatpak-first packaging. | User: "Starting from Linux as flatpak". | **Locked** |
-| D11 | Canonical crisp deployment's `SUPABASE_URL` + `allowedOrigins` baked as defaults; self-hosters re-point. | User: "anyone selfhosting will make changes". | **Locked** |
+| D11 | Canonical deployment's crispy-server URL + `allowedOrigins` baked as defaults; self-hosters re-point. | User: "anyone selfhosting will make changes". | **Locked** |
+| D12 | Pairing protocol: **crispy-server's existing RFC 8628 device grant** with new clientId `crispy-companion` (add to `DEVICE_AUTHORIZATION_CLIENT_IDS`, `deviceType:'companion'`). Companion never sees Supabase tokens; approval happens in the logged-in webapp; desktop notification = confirmation + Revoke. Revocation via existing `DELETE /v1/auth/devices/{id}`; companion lazily re-validates its device `cp_pat_`. | crispy-server already implements the full grant (`device-authorization.service.ts`); zero new endpoints, no bearer session credential crosses the origin→loopback boundary, server-side device inventory + revocation for free. Supersedes the companion-verifies-Supabase-token mechanism. | **Locked** |
 
 Earlier "no-surface" pairing (silent TOFU) and a raw QR-from-host code were considered and **rejected** for v1 in favour of D4. They survive as `pairing.requireOnlineVerification=false` and a future flag re-entering `M5` if wanted.
 
@@ -466,7 +484,7 @@ Earlier "no-surface" pairing (silent TOFU) and a raw QR-from-host code were cons
 
 | # | Question | Type |
 |---|---|---|
-| Q1 | Single canonical webapp origin (or small set) + single canonical Supabase anon-pair to bake for release? | Confirm with webapp team (ties to §9.2 + §6 allowedOrigins) |
+| Q1 | Single canonical webapp origin (or small set) + canonical crispy-server URL to bake for release? Server-side change: add `crispy-companion` to `DEVICE_AUTHORIZATION_CLIENT_IDS` + `deviceType:'companion'`. | Confirm with webapp/server repo (ties to §9.2 + §6 allowedOrigins) |
 | Q2 | Exact Stremio file-list ordering (`torrentFiles.sort(path)` assumption vs aliased TorrServer ordering) | `M0` spike |
 | Q3 | `streamProgress` precise formula (contiguous cache bytes from `CacheState` vs `torrent.stat_string` download fraction) to hold `streamProgress ≥ 0.05` gate seam-free | `M0` spike |
 | Q4 | tajan *macOS notification with action on signed LaunchAgent without entitlements* — cgo bridge minimum vs bundled helper? | `M4` spike |
