@@ -42,10 +42,22 @@ type Deps struct {
 	// DeviceName is the human label sent to the server, e.g.
 	// "Crispy Companion on hostname".
 	DeviceName string
+	// Torrents speaks the engine API; Links remembers add links for
+	// transparent re-adds after engine idle drops. MediaSem caps
+	// concurrent proxied streams (nil → default in New).
+	Torrents *engine.Client
+	Links    *engine.LinkStore
+	MediaSem chan struct{}
 }
 
 // New builds the mux with perimeter middleware applied.
 func New(d Deps) http.Handler {
+	if d.MediaSem == nil {
+		d.MediaSem = make(chan struct{}, maxMediaProxies)
+	}
+	if d.Links == nil {
+		d.Links = engine.NewLinkStore()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/companion/ping", d.handlePing)
 	mux.HandleFunc("/healthz", d.handleHealthz)
@@ -389,30 +401,8 @@ func displayEmail(email string) string {
 	return email
 }
 
-// handleStreamCompat is the M3 route table: infohash-scoped paths.
-// M1 behavior: 401 without a valid token, 503 with one (engine mapping
-// not yet implemented). This ordering lets auth tests pass early.
-func (d Deps) handleStreamCompat(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/")
-	seg, _, _ := strings.Cut(rest, "/")
-	if !isInfoHash(seg) {
-		http.NotFound(w, r)
-		return
-	}
-	tok := bearerOf(r)
-	if tok == "" {
-		tok = r.URL.Query().Get("token")
-	}
-	if tok == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	if _, ok := d.Tokens.Lookup(tok); !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	http.Error(w, "streaming not yet implemented (M3)", http.StatusServiceUnavailable)
-}
+// handleStreamCompat lives in stream.go (M3): Stremio-compatible create,
+// stats, and proxied media over the engine client.
 
 // bearerOf extracts a Bearer token. Callers must never log the result.
 func bearerOf(r *http.Request) string {

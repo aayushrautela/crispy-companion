@@ -112,6 +112,8 @@ func run() error {
 		Grant:      grantClient,
 		Session:    session,
 		DeviceName: defaultDeviceName(),
+		Torrents:   engine.NewClient("http://" + cfg.EngineAddr + ":" + strconv.Itoa(cfg.EnginePort)),
+		Links:      engine.NewLinkStore(),
 	})
 
 	// Lazy revocation check (PLAN §5.2): every 15 min, revalidate the
