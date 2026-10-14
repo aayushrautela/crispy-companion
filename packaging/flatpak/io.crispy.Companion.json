@@ -1,0 +1,28 @@
+{
+    "app-id": "io.crispy.Companion",
+    "runtime": "org.freedesktop.Platform",
+    "runtime-version": "24.08",
+    "sdk": "org.freedesktop.Sdk",
+    "command": "crispy-companion",
+    "finish-args": [
+        "--share=network",
+        "--filesystem=xdg-data/crispy-companion",
+        "--talk-name=org.freedesktop.Notifications",
+        "--talk-name=org.freedesktop.portal.Background"
+    ],
+    "modules": [
+        {
+            "name": "crispy-companion",
+            "buildsystem": "simple",
+            "build-commands": [
+                "make build"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../.."
+                }
+            ]
+        }
+    ]
+}

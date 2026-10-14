@@ -1,0 +1,256 @@
+// Package config loads crispy-companion configuration.
+//
+// Precedence: defaults < config file (TOML subset) < environment overrides.
+//
+// The TOML reader is intentionally a small subset parser (sections, string,
+// int, bool, string arrays) so the M1 skeleton stays dependency-free.
+// Unknown keys are ignored.
+package config
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// Config is the full companion configuration. See PLAN.md §9.
+type Config struct {
+	ListenAddr string
+	ListenPort int
+
+	EngineAddr          string
+	EnginePort          int
+	EngineAutoStart     bool
+	EngineBinaryPath    string
+	EngineMaxCacheBytes int64
+
+	AllowedOrigins            []string
+	RequireOnlineVerification bool
+	PendingTTLSeconds         int
+	MaxAttemptsPerMinute      int
+
+	CrispyServerURL string
+
+	SharedMode       string
+	SharedListenAddr string
+
+	LogLevel string
+	DataDir  string
+}
+
+// Default returns the M1 default configuration (loopback-only).
+func Default() Config {
+	return Config{
+		ListenAddr: "127.0.0.1",
+		ListenPort: 11470,
+
+		EngineAddr:      "127.0.0.1",
+		EnginePort:      8090,
+		EngineAutoStart: true,
+
+		AllowedOrigins: []string{
+			"https://crispy.app",
+			"https://app.crispy.example",
+		},
+		RequireOnlineVerification: true,
+		PendingTTLSeconds:         90,
+		MaxAttemptsPerMinute:      5,
+
+		CrispyServerURL: "",
+		SharedMode:      "off",
+
+		LogLevel: "info",
+	}
+}
+
+// DataFile resolves a file inside the data dir.
+func (c Config) DataFile(name string) string {
+	return filepath.Join(c.DataDir, name)
+}
+
+// Load resolves the data dir, optionally reads a TOML file, then applies env overrides.
+func Load(dataDir, configPath string) (Config, error) {
+	cfg := Default()
+	cfg.DataDir = dataDir
+
+	if configPath != "" {
+		if err := loadFile(configPath, &cfg); err != nil {
+			if !os.IsNotExist(err) {
+				return cfg, fmt.Errorf("load config %s: %w", configPath, err)
+			}
+		}
+	} else {
+		def := filepath.Join(dataDir, "config.toml")
+		if err := loadFile(def, &cfg); err != nil && !os.IsNotExist(err) {
+			return cfg, fmt.Errorf("load config %s: %w", def, err)
+		}
+	}
+
+	applyEnv(&cfg)
+	if err := cfg.Validate(); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// Validate rejects unsafe effective configuration.
+func (c Config) Validate() error {
+	if c.ListenPort < 1 || c.ListenPort > 65535 {
+		return fmt.Errorf("invalid listen port %d", c.ListenPort)
+	}
+	if c.SharedMode != "off" && c.SharedMode != "tsnet" && c.SharedMode != "raw" {
+		return fmt.Errorf("invalid shared.mode %q (want off|tsnet|raw)", c.SharedMode)
+	}
+	for _, o := range c.AllowedOrigins {
+		if o == "*" || strings.Contains(o, "*") {
+			return fmt.Errorf("allowedOrigins must be exact origins, got %q", o)
+		}
+	}
+	return nil
+}
+
+// Addr returns host:port for the shim listener.
+func (c Config) Addr() string {
+	return c.ListenAddr + ":" + strconv.Itoa(c.ListenPort)
+}
+
+// EngineEndpoint returns host:port for the TorrServer engine (loopback only).
+func (c Config) EngineEndpoint() string {
+	return c.EngineAddr + ":" + strconv.Itoa(c.EnginePort)
+}
+
+func applyEnv(c *Config) {
+	if v := os.Getenv("CRISPY_COMPANION_LISTEN_ADDR"); v != "" {
+		c.ListenAddr = v
+	}
+	if v := os.Getenv("CRISPY_COMPANION_LISTEN_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			c.ListenPort = p
+		}
+	}
+	if v := os.Getenv("CRISPY_COMPANION_SERVER_URL"); v != "" {
+		c.CrispyServerURL = v
+	}
+	if v := os.Getenv("CRISPY_COMPANION_SHARED_MODE"); v != "" {
+		c.SharedMode = v
+	}
+	if v := os.Getenv("CRISPY_COMPANION_LOG_LEVEL"); v != "" {
+		c.LogLevel = v
+	}
+	if v := os.Getenv("CRISPY_COMPANION_DATA_DIR"); v != "" {
+		c.DataDir = v
+	}
+	if v := os.Getenv("CRISPY_COMPANION_ALLOWED_ORIGINS"); v != "" {
+		c.AllowedOrigins = strings.Split(v, ",")
+		for i := range c.AllowedOrigins {
+			c.AllowedOrigins[i] = strings.TrimSpace(c.AllowedOrigins[i])
+		}
+	}
+}
+
+// loadFile parses a small TOML subset into cfg.
+func loadFile(path string, cfg *Config) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	section := ""
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 64*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.TrimSpace(line[1 : len(line)-1])
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(strings.Trim(strings.TrimSpace(v), `"`))
+		v = strings.Trim(v, `'`)
+		set(section, k, v, cfg)
+	}
+	return sc.Err()
+}
+
+func set(section, key, val string, cfg *Config) {
+	switch section + "." + key {
+	case "listen.addr":
+		cfg.ListenAddr = val
+	case "listen.port":
+		if p, err := strconv.Atoi(val); err == nil {
+			cfg.ListenPort = p
+		}
+	case "engine.addr":
+		cfg.EngineAddr = val
+	case "engine.port":
+		if p, err := strconv.Atoi(val); err == nil {
+			cfg.EnginePort = p
+		}
+	case "engine.autoStart":
+		cfg.EngineAutoStart = parseBool(val)
+	case "engine.binaryPath":
+		cfg.EngineBinaryPath = val
+	case "engine.maxCacheBytes":
+		if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+			cfg.EngineMaxCacheBytes = n
+		}
+	case "auth.requireOnlineVerification":
+		cfg.RequireOnlineVerification = parseBool(val)
+	case "pairing.pendingTTLSeconds":
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.PendingTTLSeconds = n
+		}
+	case "pairing.maxAttemptsPerMinute":
+		if n, err := strconv.Atoi(val); err == nil {
+			cfg.MaxAttemptsPerMinute = n
+		}
+	case "crispyServer.url":
+		cfg.CrispyServerURL = val
+	case "shared.mode":
+		cfg.SharedMode = val
+	case "shared.listenAddr":
+		cfg.SharedListenAddr = val
+	case "logging.level":
+		cfg.LogLevel = val
+	case "auth.allowedOrigins", "auth.tokenFile":
+		// allowedOrigins handled below; tokenFile is fixed name in M1.
+		if key == "allowedOrigins" {
+			cfg.AllowedOrigins = parseStringArray(val)
+		}
+	}
+}
+
+func parseBool(s string) bool {
+	switch strings.ToLower(s) {
+	case "true", "yes", "1", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseStringArray(s string) []string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "[")
+	s = strings.TrimSuffix(s, "]")
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(strings.Trim(strings.TrimSpace(p), `"`))
+		p = strings.Trim(p, `'`)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
