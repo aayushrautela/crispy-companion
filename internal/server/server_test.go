@@ -1,24 +1,34 @@
 package server_test
 
 import (
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/crispy-streaming/crispy-companion/internal/engine"
+	"github.com/crispy-streaming/crispy-companion/internal/grant"
 	"github.com/crispy-streaming/crispy-companion/internal/httpx"
 	"github.com/crispy-streaming/crispy-companion/internal/notify"
 	"github.com/crispy-streaming/crispy-companion/internal/pairing"
 	"github.com/crispy-streaming/crispy-companion/internal/server"
-	"log"
-	"os"
 )
 
 func testHandler(t *testing.T) (http.Handler, *pairing.Store) {
 	t.Helper()
+	return testHandlerWithServer(t, "")
+}
+
+func testHandlerWithServer(t *testing.T, serverURL string) (http.Handler, *pairing.Store) {
+	t.Helper()
 	store, err := pairing.Open(filepath.Join(t.TempDir(), "tokens.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := pairing.OpenSession(filepath.Join(t.TempDir(), "device-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,11 +42,14 @@ func testHandler(t *testing.T) (http.Handler, *pairing.Store) {
 			[]string{"https://crispy.app"},
 			false,
 		),
-		Tokens: store,
-		Window: pairing.NewWindow(90*time.Second, 5),
-		Engine: eng,
-		Notify: notify.LogNotifier{Log: log.New(os.Stderr, "test: ", 0)},
-		Mode:   "loopback",
+		Tokens:     store,
+		Window:     pairing.NewWindow(90*time.Second, 5),
+		Engine:     eng,
+		Notify:     notify.LogNotifier{Log: log.New(os.Stderr, "test: ", 0)},
+		Mode:       "loopback",
+		Grant:      grant.New(serverURL),
+		Session:    session,
+		DeviceName: "test device",
 	})
 	return h, store
 }
@@ -107,5 +120,14 @@ func TestPairRequiresClientHeader(t *testing.T) {
 		map[string]string{"Origin": "https://crispy.app"})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("pair w/o client header: got %d, want 400", rec.Code)
+	}
+}
+
+func TestPairFailClosedWithoutServer(t *testing.T) {
+	h, _ := testHandler(t) // empty server URL
+	rec := doReq(h, http.MethodPost, "http://127.0.0.1:11470/companion/pair",
+		map[string]string{"Origin": "https://crispy.app", "X-Crispy-Client": "crispy-web/1"})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("pair w/o server: got %d, want 503", rec.Code)
 	}
 }

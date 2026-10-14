@@ -20,6 +20,7 @@ import (
 
 	"github.com/crispy-streaming/crispy-companion/internal/config"
 	"github.com/crispy-streaming/crispy-companion/internal/engine"
+	"github.com/crispy-streaming/crispy-companion/internal/grant"
 	"github.com/crispy-streaming/crispy-companion/internal/httpx"
 	"github.com/crispy-streaming/crispy-companion/internal/notify"
 	"github.com/crispy-streaming/crispy-companion/internal/pairing"
@@ -68,10 +69,17 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	session, err := pairing.OpenSession(filepath.Join(dataDir, "device-session.json"))
+	if err != nil {
+		return err
+	}
 	window := pairing.NewWindow(
 		time.Duration(cfg.PendingTTLSeconds)*time.Second,
 		cfg.MaxAttemptsPerMinute,
 	)
+	// The server the device grant runs against. Empty by default:
+	// new pairings fail closed until configured (PLAN D8).
+	grantClient := grant.New(cfg.CrispyServerURL)
 
 	eng, err := engine.New(engine.Config{
 		Addr:          cfg.EngineAddr,
@@ -93,14 +101,26 @@ func run() error {
 	if cfg.SharedMode != "off" {
 		mode = cfg.SharedMode
 	}
+	notifier := notify.LogNotifier{Log: logger}
 	handler := server.New(server.Deps{
-		Policy: policy,
-		Tokens: tokens,
-		Window: window,
-		Engine: eng,
-		Notify: notify.LogNotifier{Log: logger},
-		Mode:   mode,
+		Policy:     policy,
+		Tokens:     tokens,
+		Window:     window,
+		Engine:     eng,
+		Notify:     notifier,
+		Mode:       mode,
+		Grant:      grantClient,
+		Session:    session,
+		DeviceName: defaultDeviceName(),
 	})
+
+	// Lazy revocation check (PLAN §5.2): every 15 min, revalidate the
+	// stored cp_pat_. 401 (revoked/expired) wipes local tokens; 403 means
+	// the PAT is alive but not a user session (expected); network errors
+	// are ignored so existing tokens keep working offline.
+	if grantClient.ServerURL != "" {
+		go revalidateLoop(grantClient, session, tokens, notifier, logger)
+	}
 
 	// Listener hygiene (PLAN §6): fixed loopback port, no reuse flags.
 	// Go's net.Listen never sets SO_REUSEPORT; SO_REUSEADDR semantics on
@@ -145,4 +165,48 @@ func defaultDataDir() string {
 		return "."
 	}
 	return filepath.Join(home, ".local", "share", "crispy-companion")
+}
+
+// defaultDeviceName is the human label shown on the approval screen.
+func defaultDeviceName() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown-host"
+	}
+	name := "Crispy Companion on " + host
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	return name
+}
+
+// revalidateLoop periodically checks the stored cp_pat_ against the
+// server. A dead PAT (401) wipes local tokens and posts a warning;
+// anything else (including offline) leaves them untouched.
+func revalidateLoop(g *grant.Client, session *pairing.SessionFile, tokens *pairing.Store, notifier notify.Notifier, logger *log.Logger) {
+	ticker := time.NewTicker(15 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		ds, ok := session.Get()
+		if !ok || ds.PlaintextPAT == "" {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := g.Revalidate(ctx, ds.PlaintextPAT)
+		cancel()
+		if err == nil {
+			continue
+		}
+		if err != grant.ErrPATDead {
+			logger.Printf("revalidate: server unreachable, keeping tokens")
+			continue
+		}
+		logger.Printf("revalidate: device token dead, wiping local tokens")
+		_ = tokens.RevokeAll()
+		_ = session.Clear()
+		_ = notifier.Post(notify.Notification{
+			Title: "Crispy Companion unpaired",
+			Body:  "This device was revoked. Pair again from Crispy settings.",
+		})
+	}
 }

@@ -127,6 +127,27 @@ func (s *Store) RevokeAll() error {
 	return s.saveLocked()
 }
 
+// SweepDevice revokes every token bound to deviceID except keep (the newly
+// minted one). This prevents orphan-token accumulation across re-pairs.
+func (s *Store) SweepDevice(deviceID, keep string) error {
+	if deviceID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for k, v := range s.toks {
+		if v.DeviceID == deviceID && k != keep {
+			delete(s.toks, k)
+			changed = true
+		}
+	}
+	if changed {
+		return s.saveLocked()
+	}
+	return nil
+}
+
 // Count returns the number of stored tokens (for /status paired flag).
 func (s *Store) Count() int {
 	s.mu.Lock()
@@ -139,6 +160,8 @@ type Window struct {
 	mu        sync.Mutex
 	pendingID string
 	expiresAt time.Time
+	grant     *Grant
+	outcome   *Outcome
 	attempts  []time.Time // handshake attempts for rate limiting
 	maxPerMin int
 	ttl       time.Duration
@@ -200,5 +223,100 @@ func (w *Window) Clear(id string) {
 	defer w.mu.Unlock()
 	if id == "" || w.pendingID == id {
 		w.pendingID = ""
+		w.grant = nil
+		w.outcome = nil
 	}
+}
+
+// Grant is the in-memory server state for a pending pairing. The device
+// code is single-use and bearer-equivalent: it lives in memory only, is
+// never persisted, and dies with the window (fail-closed on restart).
+type Grant struct {
+	DeviceCode      string
+	UserCode        string
+	VerificationURL string
+	// ServerDeadline is the code expiry reported by the server.
+	ServerDeadline time.Time
+	// Interval is the current poll interval (grows on slow_down).
+	Interval time.Duration
+}
+
+// OutcomeStatus is the terminal state of a pairing attempt.
+type OutcomeStatus string
+
+const (
+	OutcomeApproved OutcomeStatus = "approved"
+	OutcomeDenied   OutcomeStatus = "denied"
+	OutcomeExpired  OutcomeStatus = "expired"
+)
+
+// Outcome is the terminal result of a pairing, read exactly once via Take.
+type Outcome struct {
+	Status OutcomeStatus
+	// Approved fields (Status == OutcomeApproved only).
+	LocalToken string
+	UserID     string
+	Email      string
+}
+
+// Attach binds server grant state to a pending window. It returns false if
+// id is not the current pending pairing.
+func (w *Window) Attach(id string, g Grant) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pendingID == "" || w.pendingID != id || time.Now().After(w.expiresAt) {
+		return false
+	}
+	w.grant = &g
+	return true
+}
+
+// GrantOf returns the attached grant state, if the window is still pending.
+func (w *Window) GrantOf(id string) (Grant, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pendingID == "" || w.pendingID != id || time.Now().After(w.expiresAt) {
+		return Grant{}, false
+	}
+	if w.grant == nil {
+		return Grant{}, false
+	}
+	return *w.grant, true
+}
+
+// Complete records the terminal outcome. The poller calls this exactly
+// once; the pairing browser reads it exactly once via Take.
+func (w *Window) Complete(id string, o Outcome) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pendingID == "" || w.pendingID != id {
+		return false
+	}
+	w.outcome = &o
+	return true
+}
+
+// Take returns and consumes the terminal outcome, if present. The approved
+// local token is therefore delivered to the pairing browser exactly once.
+func (w *Window) Take(id string) (Outcome, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pendingID == "" || w.pendingID != id || w.outcome == nil {
+		return Outcome{}, false
+	}
+	o := *w.outcome
+	w.pendingID = ""
+	w.grant = nil
+	w.outcome = nil
+	return o, true
+}
+
+// ExpiresAt returns the window deadline for id, if still pending.
+func (w *Window) ExpiresAt(id string) (time.Time, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pendingID == "" || w.pendingID != id || time.Now().After(w.expiresAt) {
+		return time.Time{}, false
+	}
+	return w.expiresAt, true
 }
