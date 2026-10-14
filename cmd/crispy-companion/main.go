@@ -8,6 +8,8 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -24,6 +26,7 @@ import (
 	"github.com/crispy-streaming/crispy-companion/internal/httpx"
 	"github.com/crispy-streaming/crispy-companion/internal/notify"
 	"github.com/crispy-streaming/crispy-companion/internal/pairing"
+	"github.com/crispy-streaming/crispy-companion/internal/portal"
 	"github.com/crispy-streaming/crispy-companion/internal/server"
 )
 
@@ -34,12 +37,54 @@ func main() {
 }
 
 func run() error {
-	logger := log.New(os.Stderr, "crispy-companion: ", log.LstdFlags)
+	// Headless pairing helper (no daemon needed): prints the pending
+	// pairing's code + verification URL from the state file the daemon
+	// mirrors on every /pair.
+	if len(os.Args) >= 3 && os.Args[1] == "pair" && os.Args[2] == "show" {
+		return pairShow(resolveDataDir())
+	}
+	fs := flag.NewFlagSet("crispy-companion", flag.ContinueOnError)
+	requestAutostart := fs.Bool("request-autostart", false, "ask the desktop (portal) for background + login autostart, then run")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		return err
+	}
+	return runDaemon(*requestAutostart)
+}
 
+// resolveDataDir applies the CRISPY_COMPANION_DATA_DIR override.
+func resolveDataDir() string {
 	dataDir := defaultDataDir()
 	if v := os.Getenv("CRISPY_COMPANION_DATA_DIR"); v != "" {
 		dataDir = v
 	}
+	return dataDir
+}
+
+// pairShow prints the pending pairing for portal-less setups. Approval
+// itself always happens in the logged-in webapp; this only displays where
+// to approve.
+func pairShow(dataDir string) error {
+	st, err := pairing.ReadPairState(filepath.Join(dataDir, "pairing-state.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("no pairing pending")
+			return nil
+		}
+		return err
+	}
+	if time.Now().After(st.ExpiresAt) {
+		pairing.RemovePairState(filepath.Join(dataDir, "pairing-state.json"))
+		fmt.Println("pending pairing expired — start a new one from Crispy settings")
+		return nil
+	}
+	fmt.Printf("user code:        %s\napprove at:       %s\nexpires:         %s\n", st.UserCode, st.VerificationURL, st.ExpiresAt.Local().Format(time.RFC1123))
+	return nil
+}
+
+func runDaemon(requestAutostart bool) error {
+	logger := log.New(os.Stderr, "crispy-companion: ", log.LstdFlags)
+
+	dataDir := resolveDataDir()
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
@@ -101,7 +146,30 @@ func run() error {
 	if cfg.SharedMode != "off" {
 		mode = cfg.SharedMode
 	}
-	notifier := notify.LogNotifier{Log: logger}
+	// Prefer portal notifications (with a working Revoke button) when a
+	// session bus exists; otherwise log (Flatpak captures stderr).
+	var notifier notify.Notifier = notify.LogNotifier{Log: logger}
+	if pc, err := portal.Dial(); err != nil {
+		logger.Printf("portal unavailable, notifications go to log: %v", err)
+	} else {
+		defer pc.Close()
+		notifier = notify.NewPortal(pc, func(id, action string) {
+			if id != "crispy-pairing" || action != "revoke" {
+				return
+			}
+			logger.Printf("revoke requested from notification")
+			_ = tokens.RevokeAll()
+			_ = session.Clear()
+		})
+		if requestAutostart {
+			bg, auto, err := pc.RequestBackground("Keep torrent streaming available in the background", true, 30*time.Second)
+			if err != nil {
+				logger.Printf("autostart request failed: %v", err)
+			} else {
+				logger.Printf("autostart request: background=%v autostart=%v", bg, auto)
+			}
+		}
+	}
 	handler := server.New(server.Deps{
 		Policy:     policy,
 		Tokens:     tokens,
@@ -114,6 +182,8 @@ func run() error {
 		DeviceName: defaultDeviceName(),
 		Torrents:   engine.NewClient("http://" + cfg.EngineAddr + ":" + strconv.Itoa(cfg.EnginePort)),
 		Links:      engine.NewLinkStore(),
+		// Headless mirror for `pair show` (no secrets inside).
+		PairingStatePath: filepath.Join(dataDir, "pairing-state.json"),
 	})
 
 	// Lazy revocation check (PLAN §5.2): every 15 min, revalidate the

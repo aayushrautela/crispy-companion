@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Crispy Companion
+Comment=Local torrent streaming engine for Crispy (headless)
+Exec=crispy-companion
+Icon=io.crispy.Companion
+Categories=AudioVideo;Network;
+StartupNotify=false
+NoDisplay=true
+X-Flatpak-RenamedFrom=crispy-companion.desktop

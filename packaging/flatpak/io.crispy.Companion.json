@@ -3,19 +3,53 @@
     "runtime": "org.freedesktop.Platform",
     "runtime-version": "24.08",
     "sdk": "org.freedesktop.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.golang"
+    ],
     "command": "crispy-companion",
     "finish-args": [
         "--share=network",
-        "--filesystem=xdg-data/crispy-companion",
-        "--talk-name=org.freedesktop.Notifications",
-        "--talk-name=org.freedesktop.portal.Background"
+        "--talk-name=org.freedesktop.portal.Desktop",
+        "--talk-name=org.freedesktop.portal.Background",
+        "--filesystem=xdg-data/crispy-companion"
     ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/golang/bin",
+        "env": {
+            "GOPATH": "/run/build/crispy-companion/go",
+            "GOFLAGS": "-mod=vendor",
+            "CGO_ENABLED": "0"
+        }
+    },
     "modules": [
+        {
+            "name": "torrserver",
+            "buildsystem": "simple",
+            "build-commands": [
+                "ARCH=$(uname -m); if [ \"$ARCH\" = \"x86_64\" ]; then TS=TorrServer-linux-amd64; else TS=TorrServer-linux-arm64; fi; install -Dm755 \"$TS\" /app/bin/torrserver"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://github.com/YouROK/TorrServer/releases/download/MatriX.146.1/TorrServer-linux-amd64",
+                    "sha256": "REPLACE_WITH_AMD64_SHA256",
+                    "dest-filename": "TorrServer-linux-amd64"
+                },
+                {
+                    "type": "file",
+                    "url": "https://github.com/YouROK/TorrServer/releases/download/MatriX.146.1/TorrServer-linux-arm64",
+                    "sha256": "REPLACE_WITH_ARM64_SHA256",
+                    "dest-filename": "TorrServer-linux-arm64"
+                }
+            ]
+        },
         {
             "name": "crispy-companion",
             "buildsystem": "simple",
             "build-commands": [
-                "make build"
+                "go build -trimpath -o /app/bin/crispy-companion ./cmd/crispy-companion",
+                "install -Dm644 packaging/flatpak/io.crispy.Companion.desktop /app/share/applications/io.crispy.Companion.desktop",
+                "install -Dm644 packaging/flatpak/io.crispy.Companion.metainfo.xml /app/share/metainfo/io.crispy.Companion.metainfo.xml"
             ],
             "sources": [
                 {

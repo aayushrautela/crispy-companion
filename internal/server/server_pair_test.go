@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/crispy-streaming/crispy-companion/internal/pairing"
 )
 
 func testEnvelope(data any) map[string]any {
@@ -65,7 +69,7 @@ func pairHeaders() map[string]string {
 func TestPairApproveEndToEnd(t *testing.T) {
 	srv := fakeGrantServer("approved", 0)
 	defer srv.Close()
-	h, store := testHandlerWithServer(t, srv.URL)
+	h, store, dir := testHandlerWithServer(t, srv.URL)
 
 	rec := doReq(h, http.MethodPost, "http://127.0.0.1:11470/companion/pair", pairHeaders())
 	if rec.Code != http.StatusOK {
@@ -82,6 +86,15 @@ func TestPairApproveEndToEnd(t *testing.T) {
 	}
 	if started.Status != "pending" || started.PendingPairID == "" || started.UserCode == "" || started.VerificationURL == "" {
 		t.Fatalf("bad pair response: %+v", started)
+	}
+
+	// Headless mirror written for `pair show` (no secrets inside).
+	st, err := pairing.ReadPairState(filepath.Join(dir, "pairing-state.json"))
+	if err != nil {
+		t.Fatalf("pair-state mirror: %v", err)
+	}
+	if st.UserCode != started.UserCode || st.PendingPairID != started.PendingPairID || st.VerificationURL == "" {
+		t.Fatalf("bad pair-state mirror: %+v", st)
 	}
 
 	// Second pair while pending must conflict, never queue.
@@ -135,6 +148,10 @@ func TestPairApproveEndToEnd(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("replay read: got %d, want 404", rec.Code)
 	}
+	// Mirror cleared on terminal delivery.
+	if _, err := os.Stat(filepath.Join(dir, "pairing-state.json")); !os.IsNotExist(err) {
+		t.Fatal("pair-state mirror not cleared after delivery")
+	}
 
 	// The minted token authenticates the streaming surface (M2: 503 = authed,
 	// engine mapping is M3).
@@ -152,7 +169,7 @@ func TestPairApproveEndToEnd(t *testing.T) {
 func TestPairDeniedEndToEnd(t *testing.T) {
 	srv := fakeGrantServer("denied", 0)
 	defer srv.Close()
-	h, _ := testHandlerWithServer(t, srv.URL)
+	h, _, _ := testHandlerWithServer(t, srv.URL)
 
 	rec := doReq(h, http.MethodPost, "http://127.0.0.1:11470/companion/pair", pairHeaders())
 	var started struct {
@@ -194,7 +211,7 @@ func TestPairUnknownClientFailsClosed(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
-	h, _ := testHandlerWithServer(t, srv.URL)
+	h, _, _ := testHandlerWithServer(t, srv.URL)
 	rec := doReq(h, http.MethodPost, "http://127.0.0.1:11470/companion/pair", pairHeaders())
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unknown client: got %d, want 503", rec.Code)

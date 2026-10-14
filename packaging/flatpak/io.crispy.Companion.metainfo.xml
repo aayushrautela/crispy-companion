@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.crispy.Companion</id>
+  <name>Crispy Companion</name>
+  <summary>Local torrent streaming engine for Crispy</summary>
+  <description>
+    <p>
+      Crispy Companion is a headless local daemon that provides safe
+      on-device torrent streaming for the Crispy web app via an embedded
+      TorrServer engine. Pairing is approved in the logged-in web app;
+      there is no companion window.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.crispy.Companion.desktop</launchable>
+  <provides>
+    <id>io.crispy.Companion.desktop</id>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-10-14"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

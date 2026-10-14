@@ -19,16 +19,18 @@ import (
 
 func testHandler(t *testing.T) (http.Handler, *pairing.Store) {
 	t.Helper()
-	return testHandlerWithServer(t, "")
+	h, store, _ := testHandlerWithServer(t, "")
+	return h, store
 }
 
-func testHandlerWithServer(t *testing.T, serverURL string) (http.Handler, *pairing.Store) {
+func testHandlerWithServer(t *testing.T, serverURL string) (http.Handler, *pairing.Store, string) {
 	t.Helper()
-	store, err := pairing.Open(filepath.Join(t.TempDir(), "tokens.json"))
+	dir := t.TempDir()
+	store, err := pairing.Open(filepath.Join(dir, "tokens.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := pairing.OpenSession(filepath.Join(t.TempDir(), "device-session.json"))
+	session, err := pairing.OpenSession(filepath.Join(dir, "device-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,16 +44,17 @@ func testHandlerWithServer(t *testing.T, serverURL string) (http.Handler, *pairi
 			[]string{"https://crispy.app"},
 			false,
 		),
-		Tokens:     store,
-		Window:     pairing.NewWindow(90*time.Second, 5),
-		Engine:     eng,
-		Notify:     notify.LogNotifier{Log: log.New(os.Stderr, "test: ", 0)},
-		Mode:       "loopback",
-		Grant:      grant.New(serverURL),
-		Session:    session,
-		DeviceName: "test device",
+		Tokens:           store,
+		Window:           pairing.NewWindow(90*time.Second, 5),
+		Engine:           eng,
+		Notify:           notify.LogNotifier{Log: log.New(os.Stderr, "test: ", 0)},
+		Mode:             "loopback",
+		Grant:            grant.New(serverURL),
+		Session:          session,
+		DeviceName:       "test device",
+		PairingStatePath: filepath.Join(dir, "pairing-state.json"),
 	})
-	return h, store
+	return h, store, dir
 }
 
 func doReq(h http.Handler, method, target string, headers map[string]string) *httptest.ResponseRecorder {

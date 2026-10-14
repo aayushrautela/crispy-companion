@@ -48,6 +48,9 @@ type Deps struct {
 	Torrents *engine.Client
 	Links    *engine.LinkStore
 	MediaSem chan struct{}
+	// PairingStatePath mirrors the pending pairing's user-visible facts
+	// (pairing-state.json) for headless `pair show`. Empty disables.
+	PairingStatePath string
 }
 
 // New builds the mux with perimeter middleware applied.
@@ -152,7 +155,7 @@ func (d Deps) handlePendingStatus(w http.ResponseWriter, pid string) {
 		http.Error(w, "unknown pairing", http.StatusNotFound)
 		return
 	}
-	if o, ok := d.Window.Take(pid); ok {
+	if o, ok := d.take(pid); ok {
 		switch o.Status {
 		case pairing.OutcomeApproved:
 			writeJSON(w, http.StatusOK, map[string]any{
@@ -269,6 +272,16 @@ func (d Deps) handlePair(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusConflict, "pairing already pending")
 		return
 	}
+	// Mirror the user-visible pairing facts for headless setups
+	// (`crispy-companion pair show`). Best-effort: no secrets inside.
+	if d.PairingStatePath != "" {
+		_ = pairing.WritePairState(d.PairingStatePath, pairing.PairState{
+			PendingPairID:   id,
+			UserCode:        auth.UserCode,
+			VerificationURL: auth.VerificationURIComplete,
+			ExpiresAt:       deadline,
+		})
+	}
 	go d.pollPairing(id, auth.Interval, deadline)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":          "pending",
@@ -278,6 +291,26 @@ func (d Deps) handlePair(w http.ResponseWriter, r *http.Request) {
 		"expiresIn":       int(time.Until(deadline).Seconds()),
 		"interval":        int(auth.Interval.Seconds()),
 	})
+}
+
+// complete records the terminal pairing outcome and clears the headless
+// pairing-state mirror (best-effort: terminals must not fail over a
+// convenience file).
+func (d Deps) complete(id string, o pairing.Outcome) bool {
+	ok := d.Window.Complete(id, o)
+	if d.PairingStatePath != "" {
+		pairing.RemovePairState(d.PairingStatePath)
+	}
+	return ok
+}
+
+// take reads (once) the terminal outcome and clears the headless mirror.
+func (d Deps) take(pid string) (pairing.Outcome, bool) {
+	o, ok := d.Window.Take(pid)
+	if ok && d.PairingStatePath != "" {
+		pairing.RemovePairState(d.PairingStatePath)
+	}
+	return o, ok
 }
 
 // pollPairing polls the server until approval/denial/expiry or the window
@@ -294,7 +327,7 @@ func (d Deps) pollPairing(id string, interval time.Duration, deadline time.Time)
 			return
 		}
 		if time.Now().After(deadline) {
-			d.Window.Complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
+			d.complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -317,10 +350,10 @@ func (d Deps) pollPairing(id string, interval time.Duration, deadline time.Time)
 			}
 			timer.Reset(g.Interval)
 		case "access_denied":
-			d.Window.Complete(id, pairing.Outcome{Status: pairing.OutcomeDenied})
+			d.complete(id, pairing.Outcome{Status: pairing.OutcomeDenied})
 			return
 		case "expired_token":
-			d.Window.Complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
+			d.complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
 			return
 		case "approved":
 			d.finishApproval(id, oc.Approved)
@@ -335,7 +368,7 @@ func (d Deps) pollPairing(id string, interval time.Duration, deadline time.Time)
 // the approved identity, and posts the confirmation notification.
 func (d Deps) finishApproval(id string, ap *grant.Approved) {
 	if ap == nil {
-		d.Window.Complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
+		d.complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
 		return
 	}
 	if err := d.Session.Save(pairing.DeviceSession{
@@ -344,16 +377,16 @@ func (d Deps) finishApproval(id string, ap *grant.Approved) {
 		UserID:       ap.UserID,
 		Email:        ap.Email,
 	}); err != nil {
-		d.Window.Complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
+		d.complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
 		return
 	}
 	local, err := d.Tokens.Mint(ap.UserID, ap.Email, ap.DeviceID)
 	if err != nil {
-		d.Window.Complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
+		d.complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
 		return
 	}
 	_ = d.Tokens.SweepDevice(ap.DeviceID, local)
-	d.Window.Complete(id, pairing.Outcome{
+	d.complete(id, pairing.Outcome{
 		Status:     pairing.OutcomeApproved,
 		LocalToken: local,
 		UserID:     ap.UserID,
