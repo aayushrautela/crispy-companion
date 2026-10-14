@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -97,6 +98,10 @@ func runDaemon(requestAutostart bool) error {
 		return err
 	}
 
+	// SharedAddr starts empty (loopback-only) and is filled when an
+	// off-loopback listener comes up. Handlers read it per-request.
+	sharedAddr := &stringHolder{}
+
 	// Host allowlist: exact loopback hosts for the configured port.
 	port := cfg.ListenPort
 	hosts := []string{
@@ -170,7 +175,7 @@ func runDaemon(requestAutostart bool) error {
 			}
 		}
 	}
-	handler := server.New(server.Deps{
+	deps := server.Deps{
 		Policy:     policy,
 		Tokens:     tokens,
 		Window:     window,
@@ -184,7 +189,9 @@ func runDaemon(requestAutostart bool) error {
 		Links:      engine.NewLinkStore(),
 		// Headless mirror for `pair show` (no secrets inside).
 		PairingStatePath: filepath.Join(dataDir, "pairing-state.json"),
-	})
+		SharedAddr:       sharedAddr.Load,
+	}
+	handler := server.New(deps)
 
 	// Lazy revocation check (PLAN §5.2): every 15 min, revalidate the
 	// stored cp_pat_. 401 (revoked/expired) wipes local tokens; 403 means
@@ -206,7 +213,7 @@ func runDaemon(requestAutostart bool) error {
 	// Refuse to run if we somehow bound off-loopback.
 	if addr, ok := ln.Addr().(*net.TCPAddr); ok && !addr.IP.IsLoopback() {
 		_ = ln.Close()
-		return errors.New("refusing to serve on non-loopback address in M1")
+		return errors.New("refusing to serve the primary listener on a non-loopback address")
 	}
 	logger.Printf("listening on http://%s (mode=%s)", ln.Addr(), mode)
 
@@ -214,18 +221,65 @@ func runDaemon(requestAutostart bool) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	servers := []*http.Server{srv}
+	var serversMu sync.Mutex
+	track := func(s *http.Server) {
+		serversMu.Lock()
+		servers = append(servers, s)
+		serversMu.Unlock()
+	}
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Printf("server error: %v", err)
 		}
 	}()
 
+	// M5 shared listeners. Loopback always serves; these add a second
+	// surface. The engine stays loopback-only in every mode.
+	switch cfg.SharedMode {
+	case "raw":
+		if err := serveRaw(cfg, port, hosts, origins, dev, deps, sharedAddr, track, logger); err != nil {
+			return err
+		}
+	}
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return srv.Shutdown(ctx)
+	serversMu.Lock()
+	defer serversMu.Unlock()
+	for _, s := range servers {
+		_ = s.Shutdown(ctx)
+	}
+	return nil
+}
+
+// serveRaw serves plaintext HTTP on the configured LAN address (validated
+// non-loopback by config). Warn loudly: tokens and streams cross the LAN
+// segment unencrypted. A bind failure is fatal (fail fast on misconfig).
+func serveRaw(cfg config.Config, port int, loopHosts, origins []string, dev bool, deps server.Deps, sharedAddr *stringHolder, track func(*http.Server), logger *log.Logger) error {
+	addr := net.JoinHostPort(cfg.SharedListenAddr, strconv.Itoa(port))
+	logger.Printf("WARNING: shared.mode=raw serves PLAINTEXT HTTP on %s — tokens and streams are visible on the LAN segment; keep this address on a trusted LAN", addr)
+	sdeps := deps
+	sdeps.Policy = httpx.NewPolicy(append(append([]string(nil), loopHosts...), addr), origins, dev)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("raw shared listen: %w", err)
+	}
+	sharedAddr.Store("http://" + ln.Addr().String())
+	srv := &http.Server{
+		Handler:           server.New(sdeps),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	track(srv)
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Printf("raw shared server error: %v", err)
+		}
+	}()
+	return nil
 }
 
 func defaultDataDir() string {
@@ -282,3 +336,13 @@ func revalidateLoop(g *grant.Client, session *pairing.SessionFile, tokens *pairi
 		})
 	}
 }
+
+// stringHolder is a tiny mutex-guarded string (the userspace Go install
+// in this container ships a corrupt sync/atomic without String).
+type stringHolder struct {
+	mu sync.RWMutex
+	s  string
+}
+
+func (h *stringHolder) Store(s string) { h.mu.Lock(); h.s = s; h.mu.Unlock() }
+func (h *stringHolder) Load() string   { h.mu.RLock(); defer h.mu.RUnlock(); return h.s }

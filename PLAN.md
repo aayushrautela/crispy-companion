@@ -51,7 +51,7 @@ Requirements driving this project: **fix CORS without involving the torrent engi
 - **Further findings worth keeping:**
   - KDE Connect / LocalSend / TOFU tier precedents and a short list of pair-model CVEs — client-asserted device names are spoofable; approval popups are raceable (see `CVE-2020-26164`-class "pairing-window hijack"); short static codes are brute-gateable (`CVE-2025-32898`); unauth discovery = identity spoof (`CVE-2025-32900`). Backend-verified identity and a single-pending, expiring, ID-bound pairing gate are the antidote. **Pairing UX bug lessons included verbatim in the chat compression `docs/` lineage instead of this file.**
   - `RFC 8252` loopback hygiene: bind the IP literal, `SO_REUSEADDR/REUSEPORT` off on Linux path (Windows `SO_EXCLUSIVEADDRUSE`).
-  - Tailscale `tsnet`: an embedded-tailnode Go library whose `ListenTLS` + `WhoIs` solves LAN certs without firewall pokes. Kept as M5 headline for shared mode.
+  - Tailscale `tsnet`: embedded-tailnode Go library (`ListenTLS` + `WhoIs`). **Cut from scope (D7)** — never shipped.
 
 Stremio details are in the extended design brief (provenance: `stremio-runtime` reverse-eng README, `Stremio/server-docker` README, `stremio-server-go` package docs) — this plan distills only what the contract needs.
 
@@ -105,7 +105,6 @@ Stremio details are in the extended design brief (provenance: `stremio-runtime` 
                 │     │               │                  │
                 │     │ proxy+stats   │ optional M5      │
                 │     ▼               ▼                  │
-                │  torrserver ───►  tsnet node           │
                 │  127.0.0.1:8090    tailAddr:443 (TLS)  │
                 └──────────────────────────────────────┘
 ```
@@ -196,7 +195,7 @@ Server-side change required (small): add `"crispy-companion"` to `DEVICE_AUTHORI
 | T2 | DNS-rebinding page | Can point `evil.com → 127.0.0.1` | Same | **IN** |
 | T3 | Local malware / `curl` | Unrestricted on `user` account | Abuse engine, steal token file | OUT (user account = privileged; token file read == privileged — Jupyter's stance; not pretended otherwise) |
 | T4 | Rogue LAN device (neighbor, roommate's TV) | Can reach `addr:port` on LAN | Use engine as open proxy | **IN** |
-| T5 | On-path LAN observer | Can sniff LAN segments | Steal streams/tokens | **IN** only on raw-LAN mode (warned); **IN** on tsnet mode is eliminated |
+| T5 | On-path LAN observer | Can sniff LAN segments | Steal streams/tokens | **IN** on raw-LAN mode (warned — plaintext by design) |
 | T6 | Malicious torrent peers | Can send crafted pieces | Corrupt playback / DoS cache | **IN** (peer blocklists, TorrServer's own sanity) |
 | T7 | Lookalike account on Crispy | Can register `alice+2@example` | Impersonate approval | **IN** (email in notification) |
 
@@ -238,11 +237,10 @@ What is explicitly **not** promised: protection from a compromised local user ac
 | Mode | When | What the user observes | Security notes |
 |---|---|---|---|
 | **`loopback` (default)** | Install Flatpak / run binary → launch → open Crispy | "Pair companion" in settings → approve in the logged-in webapp (one click) → confirmation notification → transparent thereafter; local token re-used across launches | TOFU-like frictionlessness with an explicit, server-authenticated one-time approval and permanent local token thereafter |
-| **`shared: tsnet` (M5 recommended)** | Opt-in flag `shared.mode = tsnet` | Second device (phone/TV browser on `https://crispy.app`) calls same handshake → notification on desktop: "`alice@…` wants to pair from Pixel — Approve?" | WireGuard + auto Let's Encrypt via `ListenTLS`; `WhoIs` identity available as second verification leg; **no firewalls** poked |
 | **`shared: raw` (fallback warning)** | `shared.mode = raw` + explicit LAN `shared.listenAddr` | Same Approve-as-above | Unencrypted HTTP across LAN segment; token in LAN URL → warned, not closed-lipped; LAN `shared` never auto-promotes, requires explicit opt-in |
 | `pairing: strict` flag | `pairing.mode = strict` (future knob) | Always approval; never silent | Planned, not v1 default |
 
-- `shared` is never implied by `tsnet` anywhere else in flow; kernel never bridges the two (the shim needing to keep `engine` on loopback invariant).
+- Raw-LAN is the **only** shared mode; the engine stays loopback-only in every mode (invariant unchanged).
 
 ---
 
@@ -291,7 +289,7 @@ url = "${CANONICAL_SERVER_URL}"        # e.g. https://api.crispy.example
 clientId = "crispy-companion"          # must be allowlisted server-side (RFC 8628)
 
 [shared]
-mode = "off"                  # off | tsnet | raw
+mode = "off"                  # off | raw
 listenAddr = ""               # raw only: explicit LAN IP, never 0.0.0.0 by default
 maxConcurrentMediaProxies = 32
 
@@ -318,8 +316,7 @@ Env overrides mirror leaves (e.g., `CRISPY_COMPANION_LISTEN_PORT`).
 - **Binary bundle:** ship version-pinned `TorrServer-<platform>-<arch>` artefacts per `goreleaser`/manifest, SHA-pinned per arch; FOSS MatriX line recommended; `-gst` line deferred.
 - **Runtime flags** shim generates: `--ip 127.0.0.1`, `--port 8090`, `--path <cacheDir>` plus internal-only `--rdb`/`--maxsize` as configured, `--proxyurl`/`--proxymode` if user configured (sign a separate plan if needed), and internal `--httpauth`/`--webdav`/DLNA switches **off** where resolvable — the engine is intentionally minimal.
 - **WAF:** loopback-bound engines have it off; shim owns the surface. Keep peer `blocklist` enabled.
-- **Outside host firewalls:** only `tsnet`'s wire leaves the machine. Doc note: warn firewalls only in raw-LAN section, do not relax auto.
-- **If self-hosting enables TLS elsewhere (reverse-proxies / LAN certs):** keep `tsnet` TLS on tsnet tailaddr and shim's loopback host unchanged; do not mix wire-path TLS via DuckDNS `acme.sh` docs that are recorded in the design lineage — tsnet remains the recommended path here. Recorded broader TorrServer TLS knobs remain reference, not v1 plans.
+- **Outside host firewalls:** nothing leaves the machine off-LAN. Raw-LAN serves plaintext on an explicit trusted-LAN address only; keep host firewalls closed.
 - **Update story:** companion ships the engine version; a check job pings `YouROK/TorrServer` releases (`MatriX.*`) weekly and offers to upgrade after displaying the changelog (F-Droid builds treated as ref). Downgrade path is to last pinned binary.
 
 ---
@@ -328,7 +325,7 @@ Env overrides mirror leaves (e.g., `CRISPY_COMPANION_LISTEN_PORT`).
 
 ### 12.1 Shared
 
-- Language/runtime: **Go** (`≥ 1.23`), stdlib-first; only small, reviewable dep set per-platform (notifications proxy, optional `tsnet`).
+- Language/runtime: **Go** (`≥ 1.23`), stdlib-first; tiny dep set (D-Bus portal glue `godbus/dbus`, `golang.org/x/sys`).
 - Listener hygiene §6 is shared across builds.
 
 ### 12.2 Linux (Flatpak) — primary
@@ -365,7 +362,6 @@ Env overrides mirror leaves (e.g., `CRISPY_COMPANION_LISTEN_PORT`).
 │  ├─ httpx/                  # CORS/Host/Sec-Fetch, auth, rate-limits
 │  ├─ pairing/                # device-grant poll + pairing window + tokens
 │  ├─ notify/                 # per-OS portal/toast impls
-│  ├─ tsnode/                 # tsnet integration (opt-in)
 │  └─ proxy/                  # media passthrough + stats derivation
 ├─ packaging/
 │  ├─ flatpak/
@@ -380,7 +376,6 @@ Env overrides mirror leaves (e.g., `CRISPY_COMPANION_LISTEN_PORT`).
 
 Deps (candidate, pinned, no brokers):
 
-- `tailscale.com/tsnet` — optional tag `tsnet`.
 - notification backends: `gen2brain/beeep` (base), platform action extensions small.
 - No deps for CORS/auth/limiter (stdlib).
 
@@ -417,7 +412,7 @@ Deps (candidate, pinned, no brokers):
 | **M2 — Pairing + auth** | Device-grant poller (§5.2/§7; crispy-server `crispy-companion` clientId), single-pending state machine, confirmation notifications per-OS (no approvals via notification), persistent `tokens.json` + `device-session.json` stores, auth middleware (header wins), `POST /companion/pair` + `GET /companion/status` + `POST /companion/revoke`, rate-limits, 401/403/409/410/429 typed | Logged-in Crispy browser initiates pair → approves in the signed-in in-app card (`alice@…`) → companion receives approval via crispy-server poll → subsequent calls succeed with the local token. Pairing URL never leaves CORS-locked origin (T1 proof). Unpaired `POST /…/create` → 401. Server-revoked device → 401 on next re-validation |
 | **M3 — Streaming contract** | Stremio-compatible create/stats (5 % gate honoured, field mapping from engine), media proxy (`Range`/`If-Range`/`HEAD`→`206`), fan-out limits, log redaction on media keys | Existing Crispy torrent UX plays against `:11470` as it played against Stremio (seek + resume + head-request parity) on canonical origin; torrent from magnet supplied by Crispy metadata resolves inside companion against real tracker/peers |
 | **M4 — Packaging (primary: Flatpak; within—zip for Win/mac drafts)** | Flatpak manifest + portal notification/BG; Windows zip + HKCU autostart; macOS `LaunchAgent` draft | `flatpak build && flatpak run io.crispy.Companion` loopback is default; system notification action pair works on Flatpak/Linux first; win/mac "pair via file-approved fallback `crispy-companion pair show/approve`" path functional |
-| **M5 — Shared mode** | `tsnet` (opt-in `shared.mode=tsnet`) `ListenTLS` auto-certs + second surface on `tailAddr:443`; raw-LAN `listenAddr` explicit-warning | Phone/tablet/TV browser on canonical origin pairs and plays via tsnet; raw LAN with warning text; `WHOIS` logged as second leg where tsnet is used |
+| **M5 — Shared mode (raw-LAN only)** | `shared.mode=raw` second listener on explicit LAN `listenAddr` (validated non-loopback non-unspecified), loud plaintext warning, extended Host allowlist | Second device on the trusted LAN pairs (same device grant) and plays over `http://<lan-addr>:11470`; warning logged at startup |
 | **M6 — Android (deferred, not v1)** | `gomobile bind` → `.aar` + Kotlin foreground service; gallery of `ru.yourok.torrserve` F-Droid engine-only path as interop doc | Marked deferred — ticket shaped, not shipped |
 | **M7 — Hardening & release** | Threat checklist rerun (§6), CORS matrix full-browser pass (Chrome/Firefox/Safari/Edge + mobile), Host/Pending-window fuzz of pairing, rate-limit soak, update mechanism wired (`MatriX.*` tracker), docs polish, governance/licensing note | Pen-test style report (§16 matrix) in `docs/security-review.md`; `goreleaser` producing tagged, checksummed artefacts; Flathub line filed once Flatpak build lands |
 
@@ -461,13 +456,13 @@ Deps (candidate, pinned, no brokers):
 
 | # | Decision | Rationale | Status |
 |---|---|---|---|
-| D1 | Language: Go. | Single static artefact cross-builds Flatpak/Win/mac; `tsnet` is Go-native; media proxy's `net/http` fits. Confirmed by user. | **Locked** |
+| D1 | Language: Go. | Single static artefact cross-builds Flatpak/Win/mac; media proxy's `net/http` fits. Confirmed by user. | **Locked** |
 | D2 | Companion is windowless (no settings GUI). Management = headless + TorrServer web UI on loopback internally. | Per user: no extra companion complexity. | **Locked** |
 | D3 | Paired only if server-verified. Logged-in users only. | Per user: "app only caters logged in users". Mechanism superseded by D12 (was: companion forwards caller's Supabase token to `${SUPABASE_URL}/auth/v1/user`). | **Locked (mechanism via D12)** |
 | D4 | Pairing ceremony: **explicit approval showing backend-verified identity** (not silent TOFU, not code-in-browser). | Per user: "explicit notification is better … we can show a user name based on that token so the approve notification cant trick the user". Mitigates pairing-window hijacks. Mechanism superseded by D12: approval gate moved from OS notification to logged-in webapp (stronger verification); notification kept as confirmation + Revoke. | **Locked (mechanism via D12)** |
 | D5 | CORS is not authentication: pairing ceremony never relaxes CORS to `*` (Stremio comparison closed). | Confirmed: Stremio's `Access-Control-Allow-Origin: *` is not the model. Allowlist §6 is the perimeter, token is the gate. | **Locked** |
 | D6 | Engine always loopback; shim is only exposed surface. TorrServer `shared` never opens a second Host. | Safety by construction. | **Locked** |
-| D7 | `tsnet` as headline for shared mode (with raw-LAN warned fallback). | Makes LAN both secure and zero-firewall; optional. | **Planned (default rec)** |
+| D7 | ~~`tsnet` headline~~ **tsnet removed entirely; shared mode = raw-LAN only** (plaintext, loud warnings, explicit opt-in, no Internet exposure). | Per user: "dude what? why are we adding tsnet?" → "yes remove it man. fully. lan only, no need to expose to main internrl". Drops the Tailscale account-per-user dependency and 44MB vendor. | **Locked (cut)** |
 | D8 | Default pending policy for new pairings when backend unreachable: **fail-closed** (410/ph). | User: logged-in-only already; paired tokens keep working offline. `pairing.requireOnlineVerification` baked in, flip-off requires user's act. | **Planned (default rec — confirm at kick-off)** |
 | D9 | Android via `gomobile bind` → foreground service deferred to `M6`. | Prior-art path exists; would need new app-review attestation + wakelock policy. TorrServe covers engine-only in interim. | **Deferred** |
 | D10 | Flatpak-first packaging. | User: "Starting from Linux as flatpak". | **Locked** |
@@ -488,7 +483,6 @@ Earlier "no-surface" pairing (silent TOFU) and a raw QR-from-host code were cons
 | Q2 | Exact Stremio file-list ordering (`torrentFiles.sort(path)` assumption vs aliased TorrServer ordering) | `M0` spike |
 | Q3 | `streamProgress` precise formula (contiguous cache bytes from `CacheState` vs `torrent.stat_string` download fraction) to hold `streamProgress ≥ 0.05` gate seam-free | `M0` spike |
 | Q4 | tajan *macOS notification with action on signed LaunchAgent without entitlements* — cgo bridge minimum vs bundled helper? | `M4` spike |
-| Q5 | `tsnet` delivery: embedded as `shared.mode=tsnet` auto-goes via `tailscale/tailscale#tsnet` or flexible fallback to raw? | Bundling decision at `M5` |
 
 ---
 

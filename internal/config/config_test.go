@@ -29,6 +29,23 @@ func TestWildcardOriginRejected(t *testing.T) {
 	}
 }
 
+func TestRawModeRequiresExplicitLANAddr(t *testing.T) {
+	for _, addr := range []string{"", "0.0.0.0", "127.0.0.1", "::", "localhost"} {
+		cfg := config.Default()
+		cfg.SharedMode = "raw"
+		cfg.SharedListenAddr = addr
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("raw mode with addr %q must fail validation", addr)
+		}
+	}
+	cfg := config.Default()
+	cfg.SharedMode = "raw"
+	cfg.SharedListenAddr = "192.168.1.50"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("raw mode with LAN addr must validate: %v", err)
+	}
+}
+
 func TestNonLoopbackEngineRejected(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.toml")

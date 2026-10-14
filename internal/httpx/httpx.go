@@ -2,7 +2,7 @@
 //
 // PLAN.md §6 controls, enforced in this order per request:
 //  1. Host allowlist (DNS-rebinding defense)
-//  2. Sec-Fetch-Site gate (cross-site rejection)
+//  2. Sec-Fetch-Site gate (cross-site allowed only with allowlisted Origin)
 //  3. Exact Origin allowlist + CORS reflection (never "*")
 //  4. Private Network Access (PNA) response headers
 //
@@ -105,16 +105,24 @@ func (p Policy) Middleware(next http.Handler) http.Handler {
 		origin := r.Header.Get("Origin")
 		fetchSite := r.Header.Get("Sec-Fetch-Site")
 
-		// 2. Sec-Fetch-Site gate — reject cross-site outright.
-		switch strings.ToLower(fetchSite) {
-		case "cross-site":
-			http.Error(w, "cross-site request rejected", http.StatusForbidden)
-			return
-		case "same-origin", "same-site", "none", "":
-			// allowed to proceed to Origin check
-		default:
-			http.Error(w, "unrecognized Sec-Fetch-Site", http.StatusForbidden)
-			return
+		// 2. Sec-Fetch-Site gate. Real browsers label HTTPS→loopback and
+		// HTTPS→tailnet fetches as cross-site, so cross-site is allowed
+		// when — and only when — the request carries an allowlisted
+		// Origin; the Origin check below remains the actual gate
+		// (PLAN §6 T1/T2, M5 shared mode).
+		if strings.EqualFold(fetchSite, "cross-site") {
+			if origin == "" || !p.OriginAllowed(origin) {
+				http.Error(w, "cross-site request rejected", http.StatusForbidden)
+				return
+			}
+		} else {
+			switch strings.ToLower(fetchSite) {
+			case "same-origin", "same-site", "none", "":
+				// allowed to proceed to Origin check
+			default:
+				http.Error(w, "unrecognized Sec-Fetch-Site", http.StatusForbidden)
+				return
+			}
 		}
 
 		// Preflight handling.

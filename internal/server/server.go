@@ -33,7 +33,7 @@ type Deps struct {
 	Window *pairing.Window
 	Engine *engine.Supervisor
 	Notify notify.Notifier
-	Mode   string // loopback | tsnet | raw (effective shared mode)
+	Mode   string // loopback | raw (effective shared mode)
 	// Grant talks to crispy-server. A zero ServerURL means pairing is
 	// unconfigured: /pair fails closed with 503 (PLAN D8).
 	Grant *grant.Client
@@ -51,6 +51,9 @@ type Deps struct {
 	// PairingStatePath mirrors the pending pairing's user-visible facts
 	// (pairing-state.json) for headless `pair show`. Empty disables.
 	PairingStatePath string
+	// SharedAddr reports the off-loopback address serving the API
+	// (raw listen addr), or "" when loopback-only. May be nil.
+	SharedAddr func() string
 }
 
 // New builds the mux with perimeter middleware applied.
@@ -114,6 +117,7 @@ type statusResponse struct {
 	EngineOk     bool   `json:"engineOk"`
 	PairingState string `json:"pairingState"` // idle | pending
 	PendingFor   string `json:"pendingFor,omitempty"`
+	SharedAddr   string `json:"sharedAddr,omitempty"`
 }
 
 func (d Deps) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +149,7 @@ func (d Deps) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Mode:         d.Mode,
 		EngineOk:     d.Engine.Ready(),
 		PairingState: state,
+		SharedAddr:   d.sharedAddr(),
 	})
 }
 
@@ -158,12 +163,13 @@ func (d Deps) handlePendingStatus(w http.ResponseWriter, pid string) {
 	if o, ok := d.take(pid); ok {
 		switch o.Status {
 		case pairing.OutcomeApproved:
-			writeJSON(w, http.StatusOK, map[string]any{
+			resp := map[string]any{
 				"pairingState":  "approved",
 				"pendingPairId": pid,
 				"token":         o.LocalToken,
 				"user":          map[string]string{"id": o.UserID, "email": o.Email},
-			})
+			}
+			writeJSON(w, http.StatusOK, resp)
 		case pairing.OutcomeDenied:
 			writeJSON(w, http.StatusOK, map[string]string{
 				"pairingState": "denied", "pendingPairId": pid,
@@ -293,6 +299,14 @@ func (d Deps) handlePair(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// sharedAddr reports the off-loopback serving address, if configured.
+func (d Deps) sharedAddr() string {
+	if d.SharedAddr == nil {
+		return ""
+	}
+	return d.SharedAddr()
+}
+
 // complete records the terminal pairing outcome and clears the headless
 // pairing-state mirror (best-effort: terminals must not fail over a
 // convenience file).
@@ -356,7 +370,7 @@ func (d Deps) pollPairing(id string, interval time.Duration, deadline time.Time)
 			d.complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
 			return
 		case "approved":
-			d.finishApproval(id, oc.Approved)
+			d.finishApproval(id, oc.Approved, g)
 			return
 		default:
 			timer.Reset(g.Interval)
@@ -365,8 +379,9 @@ func (d Deps) pollPairing(id string, interval time.Duration, deadline time.Time)
 }
 
 // finishApproval stores the server session, mints the local token bound to
-// the approved identity, and posts the confirmation notification.
-func (d Deps) finishApproval(id string, ap *grant.Approved) {
+// the approved identity, and posts the confirmation notification. The
+// as the audit second leg and shown in the notification.
+func (d Deps) finishApproval(id string, ap *grant.Approved, g pairing.Grant) {
 	if ap == nil {
 		d.complete(id, pairing.Outcome{Status: pairing.OutcomeExpired})
 		return
@@ -401,6 +416,7 @@ func (d Deps) finishApproval(id string, ap *grant.Approved) {
 	})
 }
 
+// sharedAddr reports the off-loopback serving address, if configured.
 // pairDeviceName reads an optional {device_name} JSON body (4 KiB cap).
 // Empty/missing body keeps the hostname-derived default.
 func pairDeviceName(r *http.Request) string {

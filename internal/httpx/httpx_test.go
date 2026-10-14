@@ -34,13 +34,49 @@ func TestHostRebindingRejected(t *testing.T) {
 }
 
 func TestCrossSiteRejected(t *testing.T) {
+	cases := map[string]map[string]string{
+		"evil origin":   {"Origin": "https://evil.com", "Sec-Fetch-Site": "cross-site"},
+		"absent origin": {"Sec-Fetch-Site": "cross-site"},
+	}
+	for name, headers := range cases {
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:11470/companion/ping", nil)
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		testPolicy().Middleware(okHandler()).ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s cross-site: got %d, want 403", name, rec.Code)
+		}
+	}
+}
+
+func TestCrossSiteAllowedWithAllowlistedOrigin(t *testing.T) {
+	// M5: real browsers send Sec-Fetch-Site: cross-site for
+	// https://crispy.app → loopback (and → tailnet) fetches. The
+	// allowlisted Origin is the gate; the response stays CORS-exact.
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:11470/companion/ping", nil)
 	req.Header.Set("Origin", "https://crispy.app")
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	rec := httptest.NewRecorder()
 	testPolicy().Middleware(okHandler()).ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("cross-site: got %d, want 403", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cross-site + allowlisted origin: got %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://crispy.app" {
+		t.Fatalf("ACAO = %q, want exact origin reflection", got)
+	}
+}
+
+func TestCrossSitePreflightAllowedWithAllowlistedOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "http://127.0.0.1:11470/companion/pair", nil)
+	req.Header.Set("Origin", "https://crispy.app")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	testPolicy().Middleware(okHandler()).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("cross-site preflight: got %d, want 204", rec.Code)
 	}
 }
 

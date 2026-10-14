@@ -10,6 +10,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -101,8 +102,17 @@ func (c Config) Validate() error {
 	if c.ListenPort < 1 || c.ListenPort > 65535 {
 		return fmt.Errorf("invalid listen port %d", c.ListenPort)
 	}
-	if c.SharedMode != "off" && c.SharedMode != "tsnet" && c.SharedMode != "raw" {
-		return fmt.Errorf("invalid shared.mode %q (want off|tsnet|raw)", c.SharedMode)
+	if c.SharedMode != "off" && c.SharedMode != "raw" {
+		return fmt.Errorf("invalid shared.mode %q (want off|raw)", c.SharedMode)
+	}
+	if c.SharedMode == "raw" {
+		// Raw LAN is plaintext HTTP: demand an explicit, non-loopback,
+		// non-unspecified bind address. Never 0.0.0.0 by default, never
+		// a second loopback listener masquerading as "shared".
+		ip := net.ParseIP(c.SharedListenAddr)
+		if ip == nil || ip.IsUnspecified() || ip.IsLoopback() {
+			return fmt.Errorf("shared.mode=raw requires an explicit LAN shared.listenAddr (got %q)", c.SharedListenAddr)
+		}
 	}
 	for _, o := range c.AllowedOrigins {
 		if o == "*" || strings.Contains(o, "*") {
@@ -136,6 +146,9 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("CRISPY_COMPANION_SHARED_MODE"); v != "" {
 		c.SharedMode = v
+	}
+	if v := os.Getenv("CRISPY_COMPANION_SHARED_LISTEN_ADDR"); v != "" {
+		c.SharedListenAddr = v
 	}
 	if v := os.Getenv("CRISPY_COMPANION_LOG_LEVEL"); v != "" {
 		c.LogLevel = v

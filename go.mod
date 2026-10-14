@@ -1,8 +1,9 @@
 module github.com/crispy-streaming/crispy-companion
 
-go 1.23
+go 1.24.4
 
-require (
-	github.com/godbus/dbus/v5 v5.2.4 // indirect
-	golang.org/x/sys v0.27.0 // indirect
-)
+toolchain go1.24.7
+
+require github.com/godbus/dbus/v5 v5.2.4
+
+require golang.org/x/sys v0.33.0 // indirect
