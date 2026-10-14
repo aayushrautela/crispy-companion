@@ -237,7 +237,7 @@ What is explicitly **not** promised: protection from a compromised local user ac
 
 | Mode | When | What the user observes | Security notes |
 |---|---|---|---|
-| **`loopback` (default)** | Install Flatpak / run binary → launch → open Crispy | One notification to approve your logged-in account → then transparent. Next launches: token re-used. | TOFU-like frictionlessness without silent TOFU — explicit one-time approval, permanent token thereafter |
+| **`loopback` (default)** | Install Flatpak / run binary → launch → open Crispy | "Pair companion" in settings → approve in the logged-in webapp (one click) → confirmation notification → transparent thereafter; local token re-used across launches | TOFU-like frictionlessness with an explicit, server-authenticated one-time approval and permanent local token thereafter |
 | **`shared: tsnet` (M5 recommended)** | Opt-in flag `shared.mode = tsnet` | Second device (phone/TV browser on `https://crispy.app`) calls same handshake → notification on desktop: "`alice@…` wants to pair from Pixel — Approve?" | WireGuard + auto Let's Encrypt via `ListenTLS`; `WhoIs` identity available as second verification leg; **no firewalls** poked |
 | **`shared: raw` (fallback warning)** | `shared.mode = raw` + explicit LAN `shared.listenAddr` | Same Approve-as-above | Unencrypted HTTP across LAN segment; token in LAN URL → warned, not closed-lipped; LAN `shared` never auto-promotes, requires explicit opt-in |
 | `pairing: strict` flag | `pairing.mode = strict` (future knob) | Always approval; never silent | Planned, not v1 default |
