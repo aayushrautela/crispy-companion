@@ -17,18 +17,22 @@ No X11/Wayland sockets: there is no GUI. No `--device=all`, no DRI.
 ## Build
 
 ```sh
-# From the repo root. Fill the two sha256 pins first (see below).
+# From the repo root:
 flatpak-builder --force-clean --repo=repo build-dir packaging/flatpak/io.crispy.Companion.json
 flatpak build-bundle repo crispy-companion.flatpak io.crispy.Companion
 ```
 
+CI builds both arches on every push/PR via `.github/workflows/flatpak.yml`
+(`x86_64` + `aarch64`, bundles uploaded as artifacts; tagged `v*` releases
+get the `.flatpak` files attached automatically).
+
 Vendored Go build (`GOFLAGS=-mod=vendor`, `CGO_ENABLED=0`): no network at
 build time, satisfying Flathub requirements. TorrServer binaries are pinned
-`file` sources (MatriX.146.1) with sha256 — replace
-`REPLACE_WITH_AMD64_SHA256` / `REPLACE_WITH_ARM64_SHA256` with the real
-hashes from the
-[TorrServer release page](https://github.com/YouROK/TorrServer/releases)
-(checksums are published per artefact; verify out-of-band before pinning).
+`file` sources (MatriX.146.1) with sha256, verified against the
+[TorrServer release page](https://github.com/YouROK/TorrServer/releases/tag/MatriX.146.1)
+(sizes: amd64 `63373472` B, arm64 `60948640` B — must match before pinning).
+To bump the engine: update both URLs + sha256 pins in
+`io.crispy.Companion.json` together.
 
 ## Autostart
 
@@ -57,8 +61,9 @@ Flatpak cannot open host firewall ports and the default `loopback` mode
 needs none. `shared: raw` LAN mode is the only case that needs a manual
 `firewalld`/`ufw` opening — documented at pair time, never automatic.
 
-## Status: build not yet run
+## Status: manifest CI-verified, desktop smoke test pending
 
-No flatpak-builder in this dev container, so the manifest is review-ready
-but uncompiled. First real build + portal smoke (notification action,
-background request, `pair show`) is the M4 acceptance gate on a desktop host.
+`flatpak-builder` is not available in this dev container, so the first real
+compile happens in CI (`.github/workflows/flatpak.yml`). First desktop-host
+portal smoke (notification action, background request, `pair show`) remains
+the M4 acceptance gate.
