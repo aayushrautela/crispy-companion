@@ -60,7 +60,8 @@
             "build-commands": [
                 "go build -trimpath -o /app/bin/crispy-companion ./cmd/crispy-companion",
                 "install -Dm644 packaging/flatpak/io.crispy.Companion.desktop /app/share/applications/io.crispy.Companion.desktop",
-                "install -Dm644 packaging/flatpak/io.crispy.Companion.metainfo.xml /app/share/metainfo/io.crispy.Companion.metainfo.xml"
+                "install -Dm644 packaging/flatpak/io.crispy.Companion.metainfo.xml /app/share/metainfo/io.crispy.Companion.metainfo.xml",
+                "install -Dm644 packaging/flatpak/io.crispy.Companion.svg /app/share/icons/hicolor/scalable/apps/io.crispy.Companion.svg"
             ],
             "sources": [
                 {

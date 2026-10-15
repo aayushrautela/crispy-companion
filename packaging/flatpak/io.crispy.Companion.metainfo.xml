@@ -3,6 +3,8 @@
   <id>io.crispy.Companion</id>
   <name>Crispy Companion</name>
   <summary>Local torrent streaming engine for Crispy</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
   <description>
     <p>
       Crispy Companion is a headless local daemon that provides safe
