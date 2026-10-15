@@ -285,7 +285,7 @@ pairing.singlePending = true  # always true; not knob
 pairing.maxAttemptsPerMinute = 5
 
 [crispyServer]
-url = "${CANONICAL_SERVER_URL}"        # e.g. https://api.crispy.example
+url = ""                                   # default: unset (pairing fails closed); CI injects the deployment URL at build time, override via crispyServer.url / CRISPY_COMPANION_SERVER_URL
 clientId = "crispy-companion"          # must be allowlisted server-side (RFC 8628)
 
 [shared]

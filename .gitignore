@@ -1,1 +1,5 @@
 bin/
+# CI-generated deployment defaults (written from repository secrets by
+# .github/workflows/flatpak.yml). Never commit; local builds keep
+# fail-closed OSS defaults.
+internal/config/builddefaults_gen.go

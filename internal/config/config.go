@@ -42,9 +42,20 @@ type Config struct {
 	DataDir  string
 }
 
+// buildServerURL and buildAllowedOrigins are deployment defaults injected at
+// build time. CI generates builddefaults_gen.go from repository secrets (see
+// .github/workflows/flatpak.yml); that file is gitignored, so local builds
+// keep the fail-closed OSS defaults below. Config file values and
+// environment variables always take precedence over these.
+var buildServerURL = ""
+
+// buildAllowedOrigins is a comma-separated origin list, e.g.
+// "https://web.crispytv.tech".
+var buildAllowedOrigins = ""
+
 // Default returns the M1 default configuration (loopback-only).
 func Default() Config {
-	return Config{
+	cfg := Config{
 		ListenAddr: "127.0.0.1",
 		ListenPort: 11470,
 
@@ -60,11 +71,17 @@ func Default() Config {
 		PendingTTLSeconds:         90,
 		MaxAttemptsPerMinute:      5,
 
-		CrispyServerURL: "",
+		CrispyServerURL: strings.TrimRight(buildServerURL, "/"),
 		SharedMode:      "off",
 
 		LogLevel: "info",
 	}
+	for _, o := range strings.Split(buildAllowedOrigins, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			cfg.AllowedOrigins = append(cfg.AllowedOrigins, o)
+		}
+	}
+	return cfg
 }
 
 // DataFile resolves a file inside the data dir.
@@ -142,7 +159,8 @@ func applyEnv(c *Config) {
 		}
 	}
 	if v := os.Getenv("CRISPY_COMPANION_SERVER_URL"); v != "" {
-		c.CrispyServerURL = v
+		// Tolerate a trailing slash: the grant client appends "/v1/…".
+		c.CrispyServerURL = strings.TrimRight(v, "/")
 	}
 	if v := os.Getenv("CRISPY_COMPANION_SHARED_MODE"); v != "" {
 		c.SharedMode = v
@@ -229,7 +247,7 @@ func set(section, key, val string, cfg *Config) {
 			cfg.MaxAttemptsPerMinute = n
 		}
 	case "crispyServer.url":
-		cfg.CrispyServerURL = val
+		cfg.CrispyServerURL = strings.TrimRight(val, "/")
 	case "shared.mode":
 		cfg.SharedMode = val
 	case "shared.listenAddr":

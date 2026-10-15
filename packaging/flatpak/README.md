@@ -61,6 +61,35 @@ Flatpak cannot open host firewall ports and the default `loopback` mode
 needs none. `shared: raw` LAN mode is the only case that needs a manual
 `firewalld`/`ufw` opening — documented at pair time, never automatic.
 
+## Deployment defaults (GitHub Secrets → CI-injected, never in source)
+
+Our domains live in repository secrets, not in code. On every build the
+workflow writes them into the gitignored
+`internal/config/builddefaults_gen.go`, which the Flatpak manifest picks up
+as part of the source tree:
+
+| Secret | Purpose |
+|---|---|
+| `CRISPY_SERVER_URL` | Where the companion phones home to pair (`http://api.crispytv.tech`) |
+| `CRISPY_ALLOWED_ORIGINS` | Web origins allowed to reach the loopback API (`https://web.crispytv.tech`) |
+
+Set/rotate at: repo Settings → Secrets and variables → Actions, or:
+
+```sh
+gh secret set CRISPY_SERVER_URL --body 'http://api.crispytv.tech'
+gh secret set CRISPY_ALLOWED_ORIGINS --body 'https://web.crispytv.tech'
+```
+
+Notes:
+
+- These are **deployment values, not cryptographic secrets**: every shipped
+  bundle must contain them in readable form to function. Secrets are used to
+  keep infra URLs out of the public source tree and masked in build logs.
+- Builds without the secrets (forks, PRs) skip injection and keep the
+  fail-closed OSS defaults (no server URL, example origins only).
+- A user's own `config.toml` or `CRISPY_COMPANION_*` env vars always
+  override the compiled-in values.
+
 ## Status: manifest CI-verified, desktop smoke test pending
 
 `flatpak-builder` is not available in this dev container, so the first real
