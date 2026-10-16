@@ -40,8 +40,9 @@ func normalizeHash(h string) (string, error) {
 	return "", fmt.Errorf("bad infohash length")
 }
 
-// handleStreamCompat routes the Stremio-compatible streaming surface:
-// POST /{ih}/create, GET /{ih}/{idx}/stats.json, GET|HEAD /{ih}/{idx}.
+// handleStreamCompat routes the legacy local-server streaming surface
+// (POST /{ih}/create, GET /{ih}/{idx}/stats.json, GET|HEAD /{ih}/{idx}).
+// Kept for pre-/v1 webapp builds; removed once the migration completes.
 func (d Deps) handleStreamCompat(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/")
 	seg, tail, _ := strings.Cut(rest, "/")
@@ -186,8 +187,8 @@ type statsResponse struct {
 	EngineFileID   int     `json:"engineFileId"`
 }
 
-// handleStats reports per-file buffer progress (the webapp's 5% ready gate
-// consumes streamProgress unchanged from the Stremio flow).
+// handleStats reports per-file buffer progress for the legacy route. The
+// /v1 surface reports time-based buffer[].seconds instead of a percentage.
 func (d Deps) handleStats(w http.ResponseWriter, r *http.Request, hash, idxStr string) {
 	if d.Torrents == nil {
 		http.Error(w, "engine unavailable", http.StatusServiceUnavailable)
@@ -279,35 +280,15 @@ func (d Deps) handleMedia(w http.ResponseWriter, r *http.Request, hash, idxStr s
 		http.Error(w, "too many streams", http.StatusServiceUnavailable)
 		return
 	}
-	upReq, err := http.NewRequestWithContext(ctx, r.Method, d.Torrents.StreamURL(hash, file.ID), nil)
+	upReq, err := upstreamRequest(r, d.Torrents.StreamURL(hash, file.ID))
 	if err != nil {
 		http.Error(w, "engine unavailable", http.StatusBadGateway)
 		return
 	}
-	if h := r.Header.Get("Range"); h != "" {
-		upReq.Header.Set("Range", h)
-	}
-	if h := r.Header.Get("If-Range"); h != "" {
-		upReq.Header.Set("If-Range", h)
-	}
-	upReq.Header.Set("User-Agent", "crispy-companion/1")
-	upResp, err := d.Torrents.HTTP.Do(upReq)
+	upResp, err := mediaClient.Do(upReq)
 	if err != nil {
 		http.Error(w, "engine unavailable", http.StatusBadGateway)
 		return
 	}
-	defer upResp.Body.Close()
-	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
-		if v := upResp.Header.Get(h); v != "" {
-			w.Header().Set(h, v)
-		}
-	}
-	if w.Header().Get("Content-Type") == "" {
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
-	w.Header().Set("Accept-Ranges", "bytes")
-	w.WriteHeader(upResp.StatusCode)
-	if r.Method != http.MethodHead {
-		_, _ = io.Copy(w, upResp.Body)
-	}
+	relayMedia(w, r, upResp)
 }

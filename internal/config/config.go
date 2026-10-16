@@ -28,6 +28,12 @@ type Config struct {
 	EngineBinaryPath    string
 	EngineMaxCacheBytes int64
 
+	// /v1 readiness policy (spec §1.1): time-based buffer gating.
+	BufferMinBytes                 int64
+	BufferStartSeconds             float64
+	BufferBitrateWindowSeconds     float64
+	BufferSustainableMarginPercent float64
+
 	AllowedOrigins            []string
 	RequireOnlineVerification bool
 	PendingTTLSeconds         int
@@ -62,6 +68,11 @@ func Default() Config {
 		EngineAddr:      "127.0.0.1",
 		EnginePort:      8090,
 		EngineAutoStart: true,
+
+		BufferMinBytes:                 4 << 20,
+		BufferStartSeconds:             10,
+		BufferBitrateWindowSeconds:     10,
+		BufferSustainableMarginPercent: 100,
 
 		AllowedOrigins: []string{
 			"https://crispy.app",
@@ -135,6 +146,10 @@ func (c Config) Validate() error {
 		if o == "*" || strings.Contains(o, "*") {
 			return fmt.Errorf("allowedOrigins must be exact origins, got %q", o)
 		}
+	}
+
+	if c.BufferMinBytes < 0 || c.BufferStartSeconds < 0 || c.BufferBitrateWindowSeconds < 0 || c.BufferSustainableMarginPercent < 0 {
+		return fmt.Errorf("invalid buffer policy (negative values)")
 	}
 	return nil
 }
@@ -235,6 +250,22 @@ func set(section, key, val string, cfg *Config) {
 	case "engine.maxCacheBytes":
 		if n, err := strconv.ParseInt(val, 10, 64); err == nil {
 			cfg.EngineMaxCacheBytes = n
+		}
+	case "buffer.minBytes":
+		if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+			cfg.BufferMinBytes = n
+		}
+	case "buffer.startSeconds":
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			cfg.BufferStartSeconds = f
+		}
+	case "buffer.bitrateWindowSeconds":
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			cfg.BufferBitrateWindowSeconds = f
+		}
+	case "buffer.sustainableMarginPercent":
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			cfg.BufferSustainableMarginPercent = f
 		}
 	case "auth.requireOnlineVerification":
 		cfg.RequireOnlineVerification = parseBool(val)

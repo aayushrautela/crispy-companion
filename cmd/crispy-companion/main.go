@@ -175,7 +175,15 @@ func runDaemon(requestAutostart bool) error {
 			}
 		}
 	}
+	buffer := server.BufferConfig{
+		MinBytes:                 cfg.BufferMinBytes,
+		StartSeconds:             cfg.BufferStartSeconds,
+		BitrateWindowSeconds:     cfg.BufferBitrateWindowSeconds,
+		SustainableMarginPercent: cfg.BufferSustainableMarginPercent,
+	}
 	deps := server.Deps{
+		Buffer:     buffer,
+		V1:         server.NewV1State(buffer, false),
 		Policy:     policy,
 		Tokens:     tokens,
 		Window:     window,

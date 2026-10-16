@@ -16,7 +16,7 @@ Companion: M3 handlers against the live engine on `127.0.0.1:8090`.
 ## Findings that shaped M3
 
 1. **Hash must be valid 40-hex.** An early spike failure (`unhandled xt parameter encoding (encoded length 41)`) was a malformed 41-char test hash, not an engine bug — traced through the vendored `tsynik/torrent` fork's magnet parser to confirm.
-2. **File IDs are 1-based over the path-sorted list** (`Id: i+1 // in web id 0 is undefined`, sorted by path). Mapping `engineID = fileIdx+1` with bounds check; ordering divergence vs Stremio archive-order indices stays open as PLAN Q2 (stats carries `engineFileId` + names for future reconciliation).
+2. **File IDs are 1-based over the path-sorted list** (`Id: i+1 // in web id 0 is undefined`, sorted by path). Mapping `engineID = fileIdx+1` with bounds check; ordering divergence vs the inherited archive-order indices stays open as PLAN Q2 (the torrent object carries `files[]` for reconciliation).
 3. **Idle drop is real:** zero readers + `TorrentDisconnectTimeout` (30s default) → `get`/`cache` 404 (`expired()` in `torr/torrent.go`). The shim re-adds transparently from the remembered link (verified in tests + live: stats after drop re-adds exactly once).
 4. **Hash-only magnets need trackers.** `magnet:?xt=urn:btih:{ih}` alone leans on DHT; the shim enriches with public trackers (opentrackr, stealth) — Ubuntu metadata arrived in ~20s.
 5. **Progress formula** (byte-precise, verified live): file offset from the sorted `file_stats`, piece overlap via `PiecesLength` + `Pieces[n].Completed`. Live: after pulling 1 MiB through the proxy, stats reported `streamProgress ≈ 0.00219`, `downloaded = 13893632` (13 MiB — read-ahead working).

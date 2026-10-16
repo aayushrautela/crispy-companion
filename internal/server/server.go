@@ -54,6 +54,15 @@ type Deps struct {
 	// SharedAddr reports the off-loopback address serving the API
 	// (raw listen addr), or "" when loopback-only. May be nil.
 	SharedAddr func() string
+	// Buffer is the /v1 readiness policy (spec §1.1). Zero values take
+	// built-in defaults.
+	Buffer BufferConfig
+	// ProxyAllowInternal relaxes the /v1/proxy target guard. Tests only.
+	ProxyAllowInternal bool
+	// V1 is the process-wide /v1 state (selection, rate limits, bitrate
+	// samples, proxy client). New initializes it when nil; main shares
+	// one instance across listeners.
+	V1 *V1State
 }
 
 // New builds the mux with perimeter middleware applied.
@@ -64,13 +73,23 @@ func New(d Deps) http.Handler {
 	if d.Links == nil {
 		d.Links = engine.NewLinkStore()
 	}
+	if d.V1 == nil {
+		d.V1 = NewV1State(d.Buffer, d.ProxyAllowInternal)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/companion/ping", d.handlePing)
 	mux.HandleFunc("/healthz", d.handleHealthz)
 	mux.HandleFunc("/companion/status", d.handleStatus)
 	mux.HandleFunc("/companion/revoke", d.handleRevoke)
 	mux.HandleFunc("/companion/pair", d.handlePair)
-	// M3 streaming contract stubs (route table final, behavior later).
+	// Native /v1 surface (Go 1.22 method patterns; GET also matches HEAD).
+	mux.HandleFunc("POST /v1/torrents", d.handleV1Create)
+	mux.HandleFunc("GET /v1/torrents", d.handleV1List)
+	mux.HandleFunc("GET /v1/torrents/{id}", d.handleV1Status)
+	mux.HandleFunc("DELETE /v1/torrents/{id}", d.handleV1Delete)
+	mux.HandleFunc("GET /v1/torrents/{id}/stream", d.handleV1Stream)
+	mux.HandleFunc("GET /v1/proxy", d.handleV1Proxy)
+	// Legacy local-server surface, kept for pre-/v1 webapp builds.
 	mux.HandleFunc("/", d.handleStreamCompat)
 	return d.Policy.Middleware(mux)
 }
@@ -91,7 +110,7 @@ func (d Deps) handlePing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pingResponse{
 		Name:          "crispy-companion",
 		Version:       Version,
-		Protocol:      1,
+		Protocol:      2,
 		RequiresLogin: true,
 		Paired:        d.Tokens.Count() > 0,
 	})
@@ -450,8 +469,8 @@ func displayEmail(email string) string {
 	return email
 }
 
-// handleStreamCompat lives in stream.go (M3): Stremio-compatible create,
-// stats, and proxied media over the engine client.
+// handleStreamCompat lives in stream.go: the legacy local-server surface
+// (create/stats/media), kept until the /v1 migration ships everywhere.
 
 // bearerOf extracts a Bearer token. Callers must never log the result.
 func bearerOf(r *http.Request) string {

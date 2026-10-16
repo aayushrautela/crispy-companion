@@ -35,7 +35,7 @@
 
 ## 1. Why this exists
 
-Crispy's worker (today at `src/worker/handlers/streamingServer.ts`, contract at `ENGINE_URL = http://127.0.0.1:11470`, Stremio streaming-server shape `POST /{infoHash}/create`, `GET /{infoHash}/{fileIdx}/stats.json`, media at `/{infoHash}/{fileIdx}`) currently has no first-party local engine — users install closed-source Stremio Service to fill it. Stremio's engine:
+Crispy's worker (today at `src/worker/handlers/streamingServer.ts`, contract at `ENGINE_URL = http://127.0.0.1:11470`, legacy local-server shape `POST /{infoHash}/create`, `GET /{infoHash}/{fileIdx}/stats.json`, media at `/{infoHash}/{fileIdx}`) has no first-party local engine — users install the closed-source service that shipped that shape to fill it. That engine:
 
 - runs CORS `*` and **no auth at all** (official read: `Access-Control-Allow-Origin: *` for all origins on `127.0.0.1:11470`, no token anywhere on the HTTP surface, `NO_CORS=1` env even disables those checks; HTTPS on 12470 via `stremio.rocks` wildcards exists only for mixed-content). Any website can detect it, start torrents under the user's IP, and stream fetched bytes.
 
@@ -53,7 +53,7 @@ Requirements driving this project: **fix CORS without involving the torrent engi
   - `RFC 8252` loopback hygiene: bind the IP literal, `SO_REUSEADDR/REUSEPORT` off on Linux path (Windows `SO_EXCLUSIVEADDRUSE`).
   - Tailscale `tsnet`: embedded-tailnode Go library (`ListenTLS` + `WhoIs`). **Cut from scope (D7)** — never shipped.
 
-Stremio details are in the extended design brief (provenance: `stremio-runtime` reverse-eng README, `Stremio/server-docker` README, `stremio-server-go` package docs) — this plan distills only what the contract needs.
+Prior-art details are in the extended design brief (provenance: the legacy service's reverse-engineering README, its docker README, and its Go server package docs) — this plan distills only what the contract needs.
 
 ---
 
@@ -114,15 +114,33 @@ Invariants:
 - **TorrServer never leaves `127.0.0.1:8090`.** Only the shim is ever reachable off-box.
 - No cookies — bearer token header (API) and `?token=` (media). Media needs the query form because `<video>` can't set headers.
 - WAF/`--httpauth` on the engine remain **defense-in-depth** (shim injects them there), never the perimeter.
-- `SO_REUSEPORT=0`/`SO_REUSEADDR=0` on the shim listener (Linux; Windows `SO_EXCLUSIVEADDRUSE`). Random port is not used — we displace Stremio at `:11470` intentionally (Stremio-server-go precedent), but we fail loudly if rebounding would shadow us.
+- `SO_REUSEPORT=0`/`SO_REUSEADDR=0` on the shim listener (Linux; Windows `SO_EXCLUSIVEADDRUSE`). Random port is not used — we displace the legacy local service at `:11470` intentionally (precedent: the old Go server implementation), but we fail loudly if rebounding would shadow us.
 
 ---
 
 ## 5. Protocol contract
 
-Version `protocol = 1` (advertised in `/companion/ping`). `companion/` endpoints are added; Stremio-compatible streaming paths at root are preserved so existing Crispy work needs minimal diffs.
+Version `protocol = 2` (advertised in `/companion/ping`; webapp requires `≥2` for `/v1`, older companions surface as "update required"). `protocol = 1` served the legacy root-level `/{infoHash}/…` shape; those routes still exist on the wire but are **removed in Step B** once every deployed webapp speaks `/v1` (D13).
 
 ### 5.1 Endpoints
+
+#### 5.1a `/v1` (native; shipped in `M8`)
+
+| Route | Purpose | Auth | CORS |
+|---|---|---|---|
+| `POST /v1/torrents` | Create/ensure — body `{url: magnet\|40-hex\|32-base32\|http(s) .torrent, fileIdx?: 0}`. Hashes become tracker-enriched magnets. `202 {id,state,ready}`; rate limit 10/min per token (`429`). | token + `X-Crispy-Client` | canonical origins |
+| `GET /v1/torrents/{id}` | Torrent object: `{id,name,state,ready,buffer{contiguousBytes,seconds,bitrate,sustainable},progress,metadataProgress,downloaded,size,amountLeft,downloadSpeed,uploadSpeed,eta,peers{connected,seeding,leeching},fileIdx,selectionReason,files[],error}` + `retryAfterMs`. `404` unknown/expired. | token | canonical origins |
+| `GET /v1/torrents` | `{torrents:[ …same objects… ]}` from engine `list`. | token | canonical origins |
+| `DELETE /v1/torrents/{id}` | Stop + forget + free cached pieces (engine `rem`); clears the link store. `?purgeCache` accepted (in-memory `rem` already purges). `204`. | token + `X-Crispy-Client` | canonical origins |
+| `GET /v1/torrents/{id}/stream?file=&token=` (`HEAD` too) | **Proxied media** onto the engine with `Range`/`If-Range`/`HEAD`/`206`/`416` passthrough; shared `mediaClient` (no total timeout, 30 s header timeout) so multi-hour playback is not cut. `404` = engine no longer has it (client re-`POST`s once). | token (`?token=` or `Authorization`) | canonical origins for `fetch`; `?token=` for `<video>` |
+| `GET /v1/proxy?target=&token=` | Stream an absolute `http(s)` URL through the companion (CORS for direct-play sources). Guard: loopback/RFC1918/link-local/CGNAT/reserved targets rejected (`403`), addresses re-resolved at dial time (no DNS-rebinding window), no cross-scheme redirects. `5xx` propagated verbatim. | token | canonical origins for `fetch`; `?token=` for `<video>` |
+
+- Errors share one envelope: `{"error":{"code","message"}}` with `unauthorized 401`, `rate-limited 429`, `not-found 404`, `forbidden 403`, `bad-gateway 502`, `engine-unavailable 409/503`, `bad-request 400`.
+- States: `metadata | downloading | stalled | checking | seeding | error`. `ready` is a boolean, deliberately orthogonal to lifecycle.
+- Readiness is **time-based**, not a percentage: `ready = contiguousBytes ≥ minBufferBytes ∧ (bitrate == 0 ∨ contiguousBytes/bitrate ≥ startBufferSeconds)`; bitrate = observed new-coverage bytes/s (0 until measurable, then the seconds clause applies). `sustainable` is advisory only. Seeding is always ready. All four knobs are companion-side config (§9.2 `[buffer]`), so webapp/TV/LAN clients share one policy.
+- File selection never guesses silently: a requested `fileIdx` is honoured verbatim (`bad-file-index` when out of range), otherwise the largest video-like file is chosen (`no-video-file` when there is none); `files[]` always carries the engine's list with `wanted`/`videoLike` flags.
+
+#### 5.1b Legacy (`protocol = 1`; removed in Step B)
 
 | Route | Purpose | Auth | CORS |
 |---|---|---|---|
@@ -130,9 +148,9 @@ Version `protocol = 1` (advertised in `/companion/ping`). `companion/` endpoints
 | `POST /companion/pair` | Start pairing (RFC 8628 bootstrap via crispy-server). Header `X-Crispy-Client`. Returns `{pendingPairId, verificationUrl}`. Contains no identity secrets either way. | Origin + Host + Sec-Fetch validated; rate-limited | CORS: canonical origins only |
 | `GET /companion/status` | `{paired, mode, engineOk, pairingState:"idle"|"pending", pendingFor?}` | token | CORS: canonical origins only |
 | `POST /companion/revoke` | Revoke own token / sign out companion from this browser | token | same |
-| `POST /{infoHash}/create` | Stremio-compatible (payload left Stremio-compatible; body `{token?}` accepted but header wins). Triggers engine add. | token (header) | same |
-| `GET /{infoHash}/{fileIdx}/stats.json` | Buffer/progress probe (polled ~500 ms by webapp) — `{streamProgress:0..1, streamLen, streamName, downloaded, pieceLength}` | token (header) | same |
-| `GET /{infoHash}/{fileIdx}` (`HEAD` also) | **Proxied media** onto TorrServer `GET /stream?link=&index=&play` (`Range`/`If-Range` preserved, `Accept-Ranges: bytes`, `206` passthrough, no buffering, abort propagation). | token (`?token=` or `Authorization`, header wins) | CORS: canonical origins only for `fetch`; `?token=` accepted for `<video>` (no Origin) with `Referer` allowlist where present |
+| `POST /{infoHash}/create` | Legacy create (kept for pre-`/v1` webapp builds; removed in Step B). Triggers engine add. | token (header) | same |
+| `GET /{infoHash}/{fileIdx}/stats.json` | Legacy buffer/progress probe (removed in Step B). | token (header) | same |
+| `GET /{infoHash}/{fileIdx}` (`HEAD` also) | Legacy media route (removed in Step B); implementation now shares `/v1`'s relay. | token (`?token=` or `Authorization`, header wins) | same as `/v1` |
 | `GET /healthz` | Loopback liveness | none (127.0.0.1-only + no data) | local fetches |
 
 - `{infoHash}`: strict `40-hex` or `32-base32` (narrowed before any parsing/use). `{fileIdx}`: unsigned decimal (string → `uint`, bounds-checked).
@@ -209,7 +227,7 @@ Server-side change required (small): add `"crispy-companion"` to `DEVICE_AUTHORI
 - **Preflight-forced mutations** — every state-changing route requires the `X-Crispy-Client` header and/or JSON body so an attacker's simple-GET/POST trick never reaches handler logic.
 - **PNA response** — `Access-Control-Allow-Private-Network: true` on allowed origins (mixed-content stack's core).
 - **Token, constant-time** — per-pairing URL-safe base64 `≥128b` via `crypto/rand`; `subtle.ConstantTimeCompare` on check. Header `Authorization: Bearer …` for API; `?token=` only accepted on media (de-scoped blast: one endpoint).
-- **Listener hygiene** — fixed port `:11470` displacing Stremio is intentional (Stremio-server-go precedent); add `SO_REUSEADDR/REUSEPORT` off and loud failure if shadowing would occur.
+- **Listener hygiene** — fixed port `:11470` displacing the legacy local service is intentional (precedent: the old Go server implementation); add `SO_REUSEADDR/REUSEPORT` off and loud failure if shadowing would occur.
 - **Pairing-window discipline** — one pending per instance, `pendingTTL` 60–120 s, rate-limit (`≈5/min/IP` on handshake, `429`), notification action carries `pendingId`, approve does not tag `CORS: *` onto token issuance.
 - **Identity via server-side device grant** (crispy-server RFC 8628; §7) — the companion never receives nor verifies a bearer session token. The server mints a device-scoped `cp_pat_` only after logged-in approval; the companion separately mints its local token. No JWT secrets in the artefact.
 - **Log redaction** — never log raw bearer tokens (local companion tokens, `cp_pat_`), or full query media tokens. Redact in any pii-limited dump.
@@ -284,6 +302,13 @@ pairing.pendingTTLSeconds = 90
 pairing.singlePending = true  # always true; not knob
 pairing.maxAttemptsPerMinute = 5
 
+[buffer]
+# Time-based readiness policy for /v1 (D14). One policy for webapp, TV and LAN clients.
+minBytes = 4194304             # 4 MiB contiguous runway before readiness can flip
+startSeconds = 10              # runway seconds to hold at the observed bitrate
+bitrateWindowSeconds = 10      # observation window for the bitrate estimate (0 = unmeasured)
+sustainableMarginPercent = 100  # advisory only: speed*100 ≥ bitrate*margin ⇒ sustainable
+
 [crispyServer]
 url = ""                                   # default: unset (pairing fails closed); CI injects the deployment URL at build time, override via crispyServer.url / CRISPY_COMPANION_SERVER_URL
 clientId = "crispy-companion"          # must be allowlisted server-side (RFC 8628)
@@ -307,7 +332,7 @@ Env overrides mirror leaves (e.g., `CRISPY_COMPANION_LISTEN_PORT`).
 - Webapp served over `https://crispy.app` fetches `http://127.0.0.1:11470/…`. Two orthogonal problems: CORS and mixed-content/PNA.
 - Shim responses on allowed origins set: `Access-Control-Allow-Origin: <request origin>`, `Access-Control-Allow-Methods: GET,POST,HEAD,OPTIONS`, `Access-Control-Allow-Headers: Authorization, Content-Type, X-Crispy-Client`, `Access-Control-Allow-Private-Network: true`, `Vary: Origin` + `Access-Control-Request-Private-Network` preflight handling.
 - `<video>` playback does **not** require CORS (and `FetchMode=no-cors`), but its cross-origin is allowed via `?token=`; for browsers that send `Referer: https://crispy.app` (origin-only) the allowlist is re-checked.
-- Stremio's fallback (`Access-Control-Allow-Origin: *`) is explicitly rejected for production builds.
+- The legacy service's fallback (`Access-Control-Allow-Origin: *`) is explicitly rejected for production builds.
 
 ---
 
@@ -346,7 +371,7 @@ Env overrides mirror leaves (e.g., `CRISPY_COMPANION_LISTEN_PORT`).
 
 ### 12.5 Android — deferred
 
-- Precedent `ru.yourok.torrserve` (F-Droid, `MatriX.141.FOSS` line, `arm64-v8a … x86_64`) is engine-only. For parity we produce via `gomobile bind` → `.aar` + thin Kotlin foreground service (required for any long-lived loopback server; battery nuance: workers, wakelocks noted). `6.27`-class Stremio/Syncthing `M0Rf…` wrappers on `gomobile` semantics are already proven. Ship detail is in extended notes (§2 / `M6` below) and called out as **deferred — not v1**.
+- Precedent `ru.yourok.torrserve` (F-Droid, `MatriX.141.FOSS` line, `arm64-v8a … x86_64`) is engine-only. For parity we produce via `gomobile bind` → `.aar` + thin Kotlin foreground service (required for any long-lived loopback server; battery nuance: workers, wakelocks noted). `6.27`-class Syncthing `M0Rf…` wrappers on `gomobile` semantics are already proven. Ship detail is in extended notes (§2 / `M6` below) and called out as **deferred — not v1**.
 
 ---
 
@@ -397,7 +422,7 @@ Deps (candidate, pinned, no brokers):
    // - Origin is canonical (nothing to spoof) — don't override it.
    // Keep magnet-parse → infoHash logic; keep polling/sanctioned 5 % gate.
    ```
-4. **Auth guard:** companion `paired:false` state → Crispy shows "Sign in to enable companion" — fallback to none (or future Stremio fallback prefs behind a kill-switch, not documented).
+4. **Auth guard:** companion `paired:false` state → Crispy shows "Sign in to enable companion" — fallback to none (or a future external-service fallback behind a kill-switch, not documented).
 5. **LAN/shared UX:** second device radios for "scan QR / enter code" wait until `M5` ships; document step 1 shipping as loopback-only first.
 6. **Error surfacing:** 401/403/429 typed from worker up to UI toast; sibling to `HttpError` with action suggestion (revoke/re-pair text).
 
@@ -410,11 +435,13 @@ Deps (candidate, pinned, no brokers):
 | **M0 — Spikes (throwaway, branch-local)** | Drive TorrServer locally (`/torrents` `action=add/get`, `/stream?link=&index=&play` range, `/cache/state`) against multiple `Range:` headers; deliver `<video>` PASSTHROUGH latency note. Mixed-content/PNA matrix: Chrome/Firefox/Safari over canonical HTTPS origin → `http://127.0.0.1:11470` with/without `Allow-Private-Network`. Flatpak portal notification-actions probe on sample app | `docs/spikes/M0-notes.md` written; `streamProgress → ready` mapping documented; PNA-required headers enumerated |
 | **M1 — Skeleton (builds & registers)** | Go project init, config loader (§9), logging (redacted), listeners hygiene §6, engine lifecycle (spawn/monitor torrserver), `GET /companion/ping` + `GET /healthz`, CORS/Host/Sec-Fetch middleware on allowed origins | `go test ./…` + `make {lint,vet,build}` green; `curl -v` probe matrix matches §10 preflights; mixed-content player stability on canonical HTTPS origin |
 | **M2 — Pairing + auth** | Device-grant poller (§5.2/§7; crispy-server `crispy-companion` clientId), single-pending state machine, confirmation notifications per-OS (no approvals via notification), persistent `tokens.json` + `device-session.json` stores, auth middleware (header wins), `POST /companion/pair` + `GET /companion/status` + `POST /companion/revoke`, rate-limits, 401/403/409/410/429 typed | Logged-in Crispy browser initiates pair → approves in the signed-in in-app card (`alice@…`) → companion receives approval via crispy-server poll → subsequent calls succeed with the local token. Pairing URL never leaves CORS-locked origin (T1 proof). Unpaired `POST /…/create` → 401. Server-revoked device → 401 on next re-validation |
-| **M3 — Streaming contract** | Stremio-compatible create/stats (5 % gate honoured, field mapping from engine), media proxy (`Range`/`If-Range`/`HEAD`→`206`), fan-out limits, log redaction on media keys | Existing Crispy torrent UX plays against `:11470` as it played against Stremio (seek + resume + head-request parity) on canonical origin; torrent from magnet supplied by Crispy metadata resolves inside companion against real tracker/peers |
+| **M3 — Streaming contract** | Legacy-shaped create/stats (5 % gate honoured, field mapping from engine), media proxy (`Range`/`If-Range`/`HEAD`→`206`), fan-out limits, log redaction on media keys | Existing Crispy torrent UX plays against `:11470` exactly as it played against the previously installed local service (seek + resume + head-request parity) on canonical origin; torrent from magnet supplied by Crispy metadata resolves inside companion against real tracker/peers. Superseded by `M8` (`/v1`), routes removed in Step B |
 | **M4 — Packaging (primary: Flatpak; within—zip for Win/mac drafts)** | Flatpak manifest + portal notification/BG; Windows zip + HKCU autostart; macOS `LaunchAgent` draft | `flatpak build && flatpak run io.crispy.Companion` loopback is default; system notification action pair works on Flatpak/Linux first; win/mac "pair via file-approved fallback `crispy-companion pair show/approve`" path functional |
 | **M5 — Shared mode (raw-LAN only)** | `shared.mode=raw` second listener on explicit LAN `listenAddr` (validated non-loopback non-unspecified), loud plaintext warning, extended Host allowlist | Second device on the trusted LAN pairs (same device grant) and plays over `http://<lan-addr>:11470`; warning logged at startup |
 | **M6 — Android (deferred, not v1)** | `gomobile bind` → `.aar` + Kotlin foreground service; gallery of `ru.yourok.torrserve` F-Droid engine-only path as interop doc | Marked deferred — ticket shaped, not shipped |
+| **M8 — Native `/v1` protocol** (shipped) | `/v1/torrents` CRUD + `/v1/torrents/{id}/stream` + `/v1/proxy`, single error envelope, time-based readiness (`buffer{contiguousBytes,seconds,bitrate,sustainable}`), `[buffer]` config knobs, engine `rem`/`list` + `ContiguousForFile`, shared `mediaClient` relay (no total timeout), `protocol = 2`, create rate limit 10/min, proxy target guard (dial-time IP validation, no cross-scheme redirects) | `go test ./…` green (fake-engine e2e + unit + live-engine env-gated test); real engine: create → metadata → stream `206` → `ready=true` with contiguous runway → `DELETE` `204`; `/v1/proxy` passes bytes/Range/`5xx` and rejects loopback targets |
 | **M7 — Hardening & release** | Threat checklist rerun (§6), CORS matrix full-browser pass (Chrome/Firefox/Safari/Edge + mobile), Host/Pending-window fuzz of pairing, rate-limit soak, update mechanism wired (`MatriX.*` tracker), docs polish, governance/licensing note | Pen-test style report (§16 matrix) in `docs/security-review.md`; `goreleaser` producing tagged, checksummed artefacts; Flathub line filed once Flatpak build lands |
+| **M9 — Step B: drop the legacy root routes** | Delete `/{infoHash}/create`, `/{infoHash}/{fileIdx}/stats.json`, `/{infoHash}/{fileIdx}` and their tests once every shipped webapp gates on `protocol ≥ 2`; release as `0.2.0` | Legacy paths 404; `/v1` unchanged; webapp + companion released together |
 
 ---
 
@@ -423,6 +450,9 @@ Deps (candidate, pinned, no brokers):
 - **CORS matrix (actual, browser-driven):** canonical origins × (`GET`/`POST` +custom header) × (`no-cors` `<video>` GET) against `FetchMode=cors|samesite=no-cors` in Chrome/Firefox/Safari/Edge × `Origin: allowed | disallowed | absent` × rebind Host override → must return pass/fail as §10 dictates. Automated via `internal/httpx_test.go` + a tiny e2e harness serving a real `https://*.test` origin (or canonical domain draft).
 - **Pairing gates:** rate-limit trip, single-pending FIFO, server TTL/expiry 410, identity assertion via server (approval by `alice@…` yields an alice-marked device + confirmation; a different approver yields a different, honestly-shown identity), logged-out 401, crispy-server unreachable → fail-closed for new pairings, revoked device → 401 on next re-validation.
 - **Proxy:** `Range:` passthrough ↔ TorrServer `stream` (0-0, open-ended, out-of-bounds), `HEAD`, abort-by-close, `If-Range`, `206`/`200` semantics.
+- **`/v1` contract:** create idempotency (re-`POST` self-heals an engine idle-drop), `404` → re-`POST` once → resume, `DELETE` clears list + link store, one error envelope everywhere, `retryAfterMs` poll hint, create rate-limit trip (11th in a minute → `429`), readiness matrix (below `minBytes` false; above bytes but under `startSeconds` false; both met true; seeding always true; bitrate 0 skips the seconds clause), `?purgeCache` accepted, file selection (`requested` verbatim, out-of-range ⇒ `bad-file-index`, else largest video-like, none ⇒ `no-video-file`).
+- **`/v1/proxy`:** byte + `Range` pass-through, `5xx` propagated, non-`http(s)` and relative targets rejected, loopback/RFC1918/link-local/CGNAT targets `403` with the guard on, dial-time re-resolution, cross-scheme redirect refused.
+- **Live engine (env-gated, `CRISPY_LIVE_ENGINE`):** real TorrServer behind the full HTTP surface — create → metadata arrives → range stream `206` → `ready=true` with a non-zero contiguous runway → `DELETE` `204`. Note the engine is streaming-first: without an attached reader it fetches nothing, so readiness is only observable once a stream reader is open.
 - **Flatpak sandbox:** FS-leak checks (no `home:` readable), port binding at `:11470` owned by shim, engine at `:8090` never externally reachable, portal notification actions promotion.
 - **Windows/macOS smoke** (installed): autostart toggle, kill + restart, notification click-through.
 - See also `docs/security-review.md` for a tabular version of the same matrix.
@@ -460,7 +490,7 @@ Deps (candidate, pinned, no brokers):
 | D2 | Companion is windowless (no settings GUI). Management = headless + TorrServer web UI on loopback internally. | Per user: no extra companion complexity. | **Locked** |
 | D3 | Paired only if server-verified. Logged-in users only. | Per user: "app only caters logged in users". Mechanism superseded by D12 (was: companion forwards caller's Supabase token to `${SUPABASE_URL}/auth/v1/user`). | **Locked (mechanism via D12)** |
 | D4 | Pairing ceremony: **explicit approval showing backend-verified identity** (not silent TOFU, not code-in-browser). | Per user: "explicit notification is better … we can show a user name based on that token so the approve notification cant trick the user". Mitigates pairing-window hijacks. Mechanism superseded by D12: approval gate moved from OS notification to logged-in webapp (stronger verification); notification kept as confirmation + Revoke. | **Locked (mechanism via D12)** |
-| D5 | CORS is not authentication: pairing ceremony never relaxes CORS to `*` (Stremio comparison closed). | Confirmed: Stremio's `Access-Control-Allow-Origin: *` is not the model. Allowlist §6 is the perimeter, token is the gate. | **Locked** |
+| D5 | CORS is not authentication: pairing ceremony never relaxes CORS to `*` (prior-art comparison closed). | Confirmed: the legacy service's `Access-Control-Allow-Origin: *` is not the model. Allowlist §6 is the perimeter, token is the gate. | **Locked** |
 | D6 | Engine always loopback; shim is only exposed surface. TorrServer `shared` never opens a second Host. | Safety by construction. | **Locked** |
 | D7 | ~~`tsnet` headline~~ **tsnet removed entirely; shared mode = raw-LAN only** (plaintext, loud warnings, explicit opt-in, no Internet exposure). | Per user: "dude what? why are we adding tsnet?" → "yes remove it man. fully. lan only, no need to expose to main internrl". Drops the Tailscale account-per-user dependency and 44MB vendor. | **Locked (cut)** |
 | D8 | Default pending policy for new pairings when backend unreachable: **fail-closed** (410/ph). | User: logged-in-only already; paired tokens keep working offline. `pairing.requireOnlineVerification` baked in, flip-off requires user's act. | **Planned (default rec — confirm at kick-off)** |
@@ -468,6 +498,9 @@ Deps (candidate, pinned, no brokers):
 | D10 | Flatpak-first packaging. | User: "Starting from Linux as flatpak". | **Locked** |
 | D11 | Canonical deployment's crispy-server URL + `allowedOrigins` baked as defaults; self-hosters re-point. | User: "anyone selfhosting will make changes". | **Locked** |
 | D12 | Pairing protocol: **crispy-server's existing RFC 8628 device grant** with new clientId `crispy-companion` (add to `DEVICE_AUTHORIZATION_CLIENT_IDS`, `deviceType:'companion'`). Companion never sees Supabase tokens; approval happens in the logged-in webapp; desktop notification = confirmation + Revoke. Revocation via existing `DELETE /v1/auth/devices/{id}`; companion lazily re-validates its device `cp_pat_`. | crispy-server already implements the full grant (`device-authorization.service.ts`); zero new endpoints, no bearer session credential crosses the origin→loopback boundary, server-side device inventory + revocation for free. Supersedes the companion-verifies-Supabase-token mechanism. | **Locked** |
+| D13 | **No legacy compatibility.** The companion ships its own native `/v1` protocol (`protocol = 2`); the inherited root-level routes (`/{infoHash}/create`, `/{infoHash}/{fileIdx}/stats.json`, `/{infoHash}/{fileIdx}`) and their naming are temporary scaffolding for pre-`/v1` webapp builds only, and are deleted in Step B. No second wire shape is maintained, and the webapp has exactly two modes: paired → native `/v1`; unpaired → today's direct-play ladder. | Per user: "we dont need any old compatibility. we need webapp to work with/out companion" + "remove stremio namings as well". Keeping a second shape forever would mean two contracts, two test matrices and one inherited naming scheme to defend. The `protocol ≥ 2` ping gate makes the cutover order safe (old webapp + new companion coexist for one release). | **Locked** |
+| D14 | Readiness is **time-based**, not percent-based: `ready = contiguousBytes ≥ minBufferBytes ∧ (bitrate == 0 ∨ contiguousBytes/bitrate ≥ startBufferSeconds)`; `sustainable` advisory only; seeding always ready. All four knobs are companion-side config so every client shares one policy. | Per user: "5% buffered? That's quite a lot… I don't think anyone uses 5% buffer for streaming". A percentage gate is neither meaningful for small files nor expressible for high-bitrate sources; a runway in seconds is what a player actually needs. Field vocabulary (`progress`, `downloaded`, `amountLeft`, `downloadSpeed`, `uploadSpeed`, `eta`, `peers{connected,seeding,leeching}`, `metadataProgress`) is borrowed from qBittorrent/Transmission and the old Go server implementation's docs rather than invented. | **Locked** |
+| D15 | `/v1/proxy` rejects loopback/RFC1918/link-local/CGNAT/reserved targets, re-resolves at dial time, and refuses cross-scheme redirects. | A paired webapp must not be able to turn the companion into a LAN/loopback relay for a compromised or hostile origin, and DNS rebinding must not reopen the hole between validation and connection. | **Locked** |
 
 Earlier "no-surface" pairing (silent TOFU) and a raw QR-from-host code were considered and **rejected** for v1 in favour of D4. They survive as `pairing.requireOnlineVerification=false` and a future flag re-entering `M5` if wanted.
 
@@ -480,8 +513,8 @@ Earlier "no-surface" pairing (silent TOFU) and a raw QR-from-host code were cons
 | # | Question | Type |
 |---|---|---|
 | Q1 | Single canonical webapp origin (or small set) + canonical crispy-server URL to bake for release? Server-side change: add `crispy-companion` to `DEVICE_AUTHORIZATION_CLIENT_IDS` + `deviceType:'companion'`. | Confirm with webapp/server repo (ties to §9.2 + §6 allowedOrigins) |
-| Q2 | Exact Stremio file-list ordering (`torrentFiles.sort(path)` assumption vs aliased TorrServer ordering) | `M0` spike |
-| Q3 | `streamProgress` precise formula (contiguous cache bytes from `CacheState` vs `torrent.stat_string` download fraction) to hold `streamProgress ≥ 0.05` gate seam-free | `M0` spike |
+| Q2 | File-list ordering (path-sorted engine IDs vs aliased ordering in inherited archives) | `M0` spike → confirmed path-sorted; `/v1` returns `files[]` so clients reconcile by path, never by a guessed index |
+| Q3 | ~~`streamProgress` formula for the 5 % gate~~ → **superseded by D14**: readiness is contiguous runway in bytes/seconds (`ContiguousForFile`), and the engine is streaming-first (no reader ⇒ no bytes fetched), so readiness is only observable once a stream reader is attached. | Resolved in `M8` |
 | Q4 | tajan *macOS notification with action on signed LaunchAgent without entitlements* — cgo bridge minimum vs bundled helper? | `M4` spike |
 
 ---

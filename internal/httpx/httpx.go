@@ -152,7 +152,7 @@ func (p Policy) servePreflight(w http.ResponseWriter, r *http.Request, origin st
 		return
 	}
 	setCORS(w, origin)
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, HEAD, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Crispy-Client")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	w.WriteHeader(http.StatusNoContent)

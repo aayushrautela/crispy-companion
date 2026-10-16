@@ -32,3 +32,10 @@ func (s *LinkStore) Get(hash string) (string, bool) {
 	l, ok := s.m[hash]
 	return l, ok
 }
+
+// Delete forgets the link for hash (torrent removal).
+func (s *LinkStore) Delete(hash string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, hash)
+}
