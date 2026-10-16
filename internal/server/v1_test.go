@@ -23,6 +23,19 @@ import (
 	"github.com/crispy-streaming/crispy-companion/internal/server"
 )
 
+// testHash is the infohash every /v1 test torrents under.
+const testHash = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12"
+
+// mintToken issues a paired-device token for the tests that need one.
+func mintToken(t *testing.T, store *pairing.Store) string {
+	t.Helper()
+	tok, err := store.Mint("user-1", "alice@example.com", "dev-1")
+	if err != nil {
+		t.Fatalf("mint token: %v", err)
+	}
+	return tok
+}
+
 // v1FakeTorrent is one engine-side torrent the fake engine holds in memory.
 type v1FakeTorrent struct {
 	Name      string

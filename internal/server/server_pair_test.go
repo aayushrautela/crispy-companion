@@ -153,13 +153,13 @@ func TestPairApproveEndToEnd(t *testing.T) {
 		t.Fatal("pair-state mirror not cleared after delivery")
 	}
 
-	// The minted token authenticates the streaming surface (M2: 503 = authed,
-	// engine mapping is M3).
-	ih := "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-	rec = doReq(h, http.MethodGet, "http://127.0.0.1:11470/"+ih+"/0",
+	// The minted token authenticates the torrent surface. No engine client is
+	// wired in this harness, so the /v1 status route answers 503 (authed,
+	// engine unavailable) rather than 401/403.
+	rec = doReq(h, http.MethodGet, "http://127.0.0.1:11470/v1/torrents/"+testHash,
 		map[string]string{"Origin": "https://crispy.app", "Authorization": "Bearer " + token})
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("authed stream: got %d, want 503", rec.Code)
+		t.Fatalf("authed /v1 status: got %d, want 503", rec.Code)
 	}
 	if n := store.Count(); n != 1 {
 		t.Fatalf("token store count = %d, want 1", n)

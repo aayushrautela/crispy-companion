@@ -76,30 +76,24 @@ func TestPingPublic(t *testing.T) {
 	}
 }
 
-func TestStreamCompatUnauthIs401(t *testing.T) {
-	h, _ := testHandler(t)
-	ih := "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-	rec := doReq(h, http.MethodGet, "http://127.0.0.1:11470/"+ih+"/0",
-		map[string]string{"Origin": "https://crispy.app"})
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("unauth stream: got %d, want 401", rec.Code)
-	}
-}
-
-func TestStreamCompatAuthIs503InM1(t *testing.T) {
+// The inherited root-level stream routes are gone (PLAN D13); the native
+// /v1 surface is the only torrent surface now.
+func TestLegacyStreamRoutesAreGone(t *testing.T) {
 	h, store := testHandler(t)
 	tok, err := store.Mint("u1", "alice@example.com", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ih := "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-	rec := doReq(h, http.MethodGet, "http://127.0.0.1:11470/"+ih+"/0",
-		map[string]string{
-			"Origin":        "https://crispy.app",
-			"Authorization": "Bearer " + tok,
-		})
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("auth stream M1: got %d, want 503", rec.Code)
+	for _, target := range []string{"/" + ih + "/create", "/" + ih + "/0/stats.json", "/" + ih + "/0"} {
+		rec := doReq(h, http.MethodGet, "http://127.0.0.1:11470"+target,
+			map[string]string{
+				"Origin":        "https://crispy.app",
+				"Authorization": "Bearer " + tok,
+			})
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: got %d, want 404", target, rec.Code)
+		}
 	}
 }
 

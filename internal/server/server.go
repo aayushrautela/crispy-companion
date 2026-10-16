@@ -24,7 +24,7 @@ import (
 )
 
 // Version is set via -ldflags at release time.
-var Version = "0.1.0-dev"
+var Version = "0.2.0-dev"
 
 // Deps are the server's collaborators.
 type Deps struct {
@@ -89,8 +89,6 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("DELETE /v1/torrents/{id}", d.handleV1Delete)
 	mux.HandleFunc("GET /v1/torrents/{id}/stream", d.handleV1Stream)
 	mux.HandleFunc("GET /v1/proxy", d.handleV1Proxy)
-	// Legacy local-server surface, kept for pre-/v1 webapp builds.
-	mux.HandleFunc("/", d.handleStreamCompat)
 	return d.Policy.Middleware(mux)
 }
 
@@ -468,9 +466,6 @@ func displayEmail(email string) string {
 	}
 	return email
 }
-
-// handleStreamCompat lives in stream.go: the legacy local-server surface
-// (create/stats/media), kept until the /v1 migration ships everywhere.
 
 // bearerOf extracts a Bearer token. Callers must never log the result.
 func bearerOf(r *http.Request) string {
