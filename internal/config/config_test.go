@@ -77,3 +77,16 @@ func TestEnvOverride(t *testing.T) {
 		t.Fatalf("server url override failed: %q", cfg.CrispyServerURL)
 	}
 }
+
+// The pinned engine binary has to be the default. An empty binaryPath makes
+// the supervisor skip spawning torrserver altogether, so the shipped Flatpak
+// pairs fine and then cannot play a single torrent.
+func TestDefaultStartsPinnedEngine(t *testing.T) {
+	cfg := config.Default()
+	if cfg.EngineBinaryPath != "torrserver" {
+		t.Fatalf("engine binaryPath default = %q, want %q", cfg.EngineBinaryPath, "torrserver")
+	}
+	if !cfg.EngineAutoStart {
+		t.Fatal("engine autoStart default = false, want true")
+	}
+}

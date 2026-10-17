@@ -288,7 +288,7 @@ port = 11470
 addr = "127.0.0.1"
 port = 8090
 autoStart = true              # shim spawns/monitors torrserver child
-binaryPath = ""               # override pinned bundle
+binaryPath = "torrserver"     # pinned bundle binary, resolved via PATH (/app/bin/torrserver in the Flatpak); override for a custom build
 maxCacheBytes = 0             # 0 = TorrServer default (--maxsize behaviour), configurable per-GUI
 
 [auth]

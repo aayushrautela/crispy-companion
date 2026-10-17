@@ -263,6 +263,13 @@ type v1CreateResponse struct {
 	Ready bool   `json:"ready"`
 }
 
+// engineUnavailableMsg is what users see when the companion's own engine is
+// not answering. The underlying client error is a Go transport string
+// ("Post http://127.0.0.1:8090/torrents: dial tcp ...: connection refused")
+// that nobody can act on; the reason (usually a missing engine binary) is
+// logged by the companion at startup instead.
+const engineUnavailableMsg = "the companion's torrent engine is not responding — check the companion app on the paired machine"
+
 func writeV1Error(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, v1ErrorEnvelope{Error: v1ErrorBody{Code: code, Message: message}})
 }
@@ -534,7 +541,7 @@ func (d Deps) handleV1Create(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	st, err := d.Torrents.Add(ctx, link)
 	if err != nil {
-		writeV1Error(w, http.StatusConflict, "engine-unavailable", err.Error())
+		writeV1Error(w, http.StatusConflict, "engine-unavailable", engineUnavailableMsg)
 		return
 	}
 	id := strings.ToLower(st.Hash)
@@ -577,7 +584,7 @@ func (d Deps) handleV1Status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeV1Error(w, http.StatusServiceUnavailable, "engine-unavailable", err.Error())
+		writeV1Error(w, http.StatusServiceUnavailable, "engine-unavailable", engineUnavailableMsg)
 		return
 	}
 	body := d.v1TorrentBody(ctx, hash, st, d.V1.selectedFor(hash))
@@ -597,7 +604,7 @@ func (d Deps) handleV1List(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	list, err := d.Torrents.List(ctx)
 	if err != nil {
-		writeV1Error(w, http.StatusServiceUnavailable, "engine-unavailable", err.Error())
+		writeV1Error(w, http.StatusServiceUnavailable, "engine-unavailable", engineUnavailableMsg)
 		return
 	}
 	torrents := make([]v1Torrent, 0, len(list))
@@ -636,7 +643,7 @@ func (d Deps) handleV1Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	if err := d.Torrents.Rem(ctx, hash); err != nil {
-		writeV1Error(w, http.StatusServiceUnavailable, "engine-unavailable", err.Error())
+		writeV1Error(w, http.StatusServiceUnavailable, "engine-unavailable", engineUnavailableMsg)
 		return
 	}
 	d.Links.Delete(hash)
@@ -676,7 +683,7 @@ func (d Deps) handleV1Stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeV1Error(w, http.StatusServiceUnavailable, "engine-unavailable", err.Error())
+		writeV1Error(w, http.StatusServiceUnavailable, "engine-unavailable", engineUnavailableMsg)
 		return
 	}
 	if fileIdx < 0 {

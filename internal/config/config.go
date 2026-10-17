@@ -68,6 +68,12 @@ func Default() Config {
 		EngineAddr:      "127.0.0.1",
 		EnginePort:      8090,
 		EngineAutoStart: true,
+		// The pinned engine binary, resolved through PATH: the Flatpak
+		// installs it at /app/bin/torrserver. Leaving this empty means the
+		// supervisor never spawns an engine, so torrents cannot play — the
+		// supervisor degrades gracefully (no error) when the binary is
+		// genuinely absent.
+		EngineBinaryPath: "torrserver",
 
 		BufferMinBytes:                 4 << 20,
 		BufferStartSeconds:             10,

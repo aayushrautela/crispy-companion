@@ -34,6 +34,9 @@ type Supervisor struct {
 	mu  sync.Mutex
 	cmd *exec.Cmd
 	ok  bool
+	// startErr remembers why the engine could not be started so the caller
+	// can log it: auto-start failures are non-fatal by design.
+	startErr error
 }
 
 // New creates a supervisor. It does not start anything.
@@ -51,6 +54,7 @@ func (s *Supervisor) Start() error {
 	defer s.mu.Unlock()
 	if !s.cfg.AutoStart || s.cfg.BinaryPath == "" {
 		s.ok = false
+		s.startErr = errors.New("engine auto-start is off (engine.autoStart / engine.binaryPath)")
 		return nil
 	}
 	args := []string{
@@ -58,6 +62,16 @@ func (s *Supervisor) Start() error {
 		"--port", fmt.Sprint(s.cfg.Port),
 	}
 	if s.cfg.CacheDir != "" {
+		// TorrServer opens <path>/config.db on startup and exits if the
+		// directory is missing — which is exactly the state of a fresh
+		// install, where the companion's own data dir exists but nothing has
+		// created the cache subdirectory yet. Create it here so the engine
+		// starts on first run instead of dying silently.
+		if err := os.MkdirAll(s.cfg.CacheDir, 0o700); err != nil {
+			s.ok = false
+			s.startErr = fmt.Errorf("create engine cache dir %q: %w", s.cfg.CacheDir, err)
+			return nil
+		}
 		args = append(args, "--path", s.cfg.CacheDir)
 	}
 	if s.cfg.MaxCacheBytes > 0 {
@@ -67,16 +81,30 @@ func (s *Supervisor) Start() error {
 	cmd.Stdout = nil // M1: inherit nothing; M3 wires ring-buffer logs.
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			s.ok = false
-			return nil
-		}
-		return fmt.Errorf("start engine: %w", err)
+		// A missing binary (exec.ErrNotFound for a bare name resolved
+		// through PATH, os.ErrNotExist for an absolute path) is the common
+		// case; a wrong-arch or corrupt binary shows up here too. None of it
+		// is worth killing the companion over: pairing, status and revocation
+		// keep working, StartError() tells the log why torrents cannot play.
+		s.ok = false
+		s.startErr = fmt.Errorf("start engine %q: %w", s.cfg.BinaryPath, err)
+		return nil
 	}
 	s.cmd = cmd
 	go s.watch(cmd)
 	s.ok = true
+	s.startErr = nil
 	return nil
+}
+
+// StartError reports why the engine could not be started, or nil when it
+// started (or is still coming up). Start deliberately swallows a missing
+// binary so the rest of the companion keeps working; this is how that reason
+// reaches the log instead of the void.
+func (s *Supervisor) StartError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startErr
 }
 
 func (s *Supervisor) watch(cmd *exec.Cmd) {

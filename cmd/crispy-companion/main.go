@@ -145,6 +145,11 @@ func runDaemon(requestAutostart bool) error {
 	if err := eng.Start(); err != nil {
 		return err
 	}
+	// A dead engine is not fatal (pairing, revocation and status keep
+	// working), but torrents cannot play without it, so say why.
+	if err := eng.StartError(); err != nil {
+		logger.Printf("torrent engine not started: %v (torrent playback will fail until it runs)", err)
+	}
 	defer eng.Stop()
 
 	mode := "loopback"
