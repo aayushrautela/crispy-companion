@@ -309,7 +309,7 @@ bitrateWindowSeconds = 10      # observation window for the bitrate estimate (0 
 sustainableMarginPercent = 100  # advisory only: speed*100 ≥ bitrate*margin ⇒ sustainable
 
 [crispyServer]
-url = ""                                   # default: unset (pairing fails closed); CI injects the deployment URL at build time, override via crispyServer.url / CRISPY_COMPANION_SERVER_URL
+url = ""                                   # default: unset (pairing fails closed); build time injection via scripts/builddefaults.sh (CI repository secrets, or .env per .env.example), runtime override via crispyServer.url / CRISPY_COMPANION_SERVER_URL
 clientId = "crispy-companion"          # must be allowlisted server-side (RFC 8628)
 
 [shared]

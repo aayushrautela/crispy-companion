@@ -58,6 +58,7 @@
             "name": "crispy-companion",
             "buildsystem": "simple",
             "build-commands": [
+                "bash scripts/builddefaults.sh",
                 "go build -trimpath -o /app/bin/crispy-companion ./cmd/crispy-companion",
                 "install -Dm644 packaging/flatpak/io.crispy.Companion.desktop /app/share/applications/io.crispy.Companion.desktop",
                 "install -Dm644 packaging/flatpak/io.crispy.Companion.metainfo.xml /app/share/metainfo/io.crispy.Companion.metainfo.xml",
