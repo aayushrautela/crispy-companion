@@ -88,7 +88,7 @@ func Default() Config {
 		PendingTTLSeconds:         90,
 		MaxAttemptsPerMinute:      5,
 
-		CrispyServerURL: strings.TrimRight(buildServerURL, "/"),
+		CrispyServerURL: normalizeServerURL(buildServerURL),
 		SharedMode:      "off",
 
 		LogLevel: "info",
@@ -99,6 +99,32 @@ func Default() Config {
 		}
 	}
 	return cfg
+}
+
+// normalizeServerURL tidies a Crispy server URL and keeps the device grant
+// off plain HTTP.
+//
+// The trailing slash is trimmed (the grant client appends "/v1/…"), and a
+// non-loopback http:// host is upgraded to https://. The grant poll carries
+// the device code and its reply carries the cp_pat_, so neither may travel
+// in cleartext. Loopback keeps http so local test servers still work.
+func normalizeServerURL(raw string) string {
+	u := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if u == "" || !strings.HasPrefix(u, "http://") {
+		return u
+	}
+	host := strings.TrimPrefix(u, "http://")
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return u
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return u
+	}
+	return "https://" + host
 }
 
 // DataFile resolves a file inside the data dir.
@@ -181,7 +207,7 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("CRISPY_COMPANION_SERVER_URL"); v != "" {
 		// Tolerate a trailing slash: the grant client appends "/v1/…".
-		c.CrispyServerURL = strings.TrimRight(v, "/")
+		c.CrispyServerURL = normalizeServerURL(v)
 	}
 	if v := os.Getenv("CRISPY_COMPANION_SHARED_MODE"); v != "" {
 		c.SharedMode = v
@@ -284,7 +310,7 @@ func set(section, key, val string, cfg *Config) {
 			cfg.MaxAttemptsPerMinute = n
 		}
 	case "crispyServer.url":
-		cfg.CrispyServerURL = strings.TrimRight(val, "/")
+		cfg.CrispyServerURL = normalizeServerURL(val)
 	case "shared.mode":
 		cfg.SharedMode = val
 	case "shared.listenAddr":

@@ -99,6 +99,47 @@ func TestAuthorizeUnknownClient(t *testing.T) {
 	}
 }
 
+func TestAuthorizeSurvivesRedirect(t *testing.T) {
+	// A deployment behind an nginx http→https redirect answers 301. Go would
+	// rewrite the POST to a GET and drop the body, so the API would reject
+	// the grant with "must have required property 'clientId'".
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method across redirect = %q, want POST", r.Method)
+		}
+		var body struct {
+			ClientID string `json:"clientId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.ClientID != "crispy-companion" {
+			t.Errorf("clientId lost across redirect: %q", body.ClientID)
+		}
+		writeJSON(w, 201, envelope(map[string]any{
+			"deviceCode":              "cp_dvc_testcode",
+			"userCode":                "ABCD-EFGH",
+			"verificationUri":         "https://app.example.test/device",
+			"verificationUriComplete": "https://app.example.test/device?user_code=ABCD-EFGH",
+			"expiresIn":               900,
+			"interval":                5,
+		}))
+	}))
+	defer origin.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, origin.URL+r.URL.Path, http.StatusMovedPermanently)
+	}))
+	defer redirector.Close()
+
+	c := grant.New(redirector.URL)
+	a, err := c.Authorize(context.Background(), "test device", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.DeviceCode != "cp_dvc_testcode" || a.UserCode != "ABCD-EFGH" {
+		t.Fatalf("bad authorize: %+v", a)
+	}
+}
+
 func TestPollPendingAndApproved(t *testing.T) {
 	srv := fakeServer(t, "approved", 1)
 	defer srv.Close()

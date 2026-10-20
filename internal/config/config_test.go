@@ -78,6 +78,32 @@ func TestEnvOverride(t *testing.T) {
 	}
 }
 
+// The device-grant poll carries the device code and its reply carries the
+// cp_pat_, so a plain-HTTP Crispy URL must never survive into the config.
+func TestServerURLUpgradedToHTTPS(t *testing.T) {
+	t.Setenv("CRISPY_COMPANION_SERVER_URL", "http://api.example.test/")
+	cfg, err := config.Load(t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CrispyServerURL != "https://api.example.test" {
+		t.Fatalf("server url = %q, want %q", cfg.CrispyServerURL, "https://api.example.test")
+	}
+}
+
+func TestServerURLKeepsLoopbackHTTP(t *testing.T) {
+	for _, raw := range []string{"http://127.0.0.1:8080", "http://localhost:8080"} {
+		t.Setenv("CRISPY_COMPANION_SERVER_URL", raw)
+		cfg, err := config.Load(t.TempDir(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.CrispyServerURL != raw {
+			t.Fatalf("server url = %q, want %q", cfg.CrispyServerURL, raw)
+		}
+	}
+}
+
 // The pinned engine binary has to be the default. An empty binaryPath makes
 // the supervisor skip spawning torrserver altogether, so the shipped Flatpak
 // pairs fine and then cannot play a single torrent.

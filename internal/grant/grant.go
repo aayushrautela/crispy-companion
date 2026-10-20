@@ -81,8 +81,41 @@ type Client struct {
 func New(serverURL string) *Client {
 	return &Client{
 		ServerURL: serverURL,
-		HTTP:      &http.Client{Timeout: 10 * time.Second},
+		HTTP: &http.Client{
+			Timeout:       10 * time.Second,
+			CheckRedirect: preserveRequestOnRedirect,
+		},
 	}
+}
+
+// preserveRequestOnRedirect replays the original method and body when the
+// server answers with a redirect.
+//
+// net/http rewrites POST to GET on 301/302/303 and drops the body. A Crispy
+// deployment behind an nginx http→https redirect therefore never sees the
+// device-grant POST and answers "must have required property 'clientId'"
+// instead of a device code. Replaying the request keeps the grant working
+// across the redirect and keeps the poll — which carries the device code and
+// returns the cp_pat_ — intact.
+func preserveRequestOnRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return errors.New("too many redirects")
+	}
+	orig := via[0]
+	if orig == nil || req.Method == orig.Method {
+		return nil // 307/308 already preserved method and body
+	}
+	if orig.GetBody == nil {
+		return nil // nothing to replay (e.g. GET or HEAD)
+	}
+	body, err := orig.GetBody()
+	if err != nil {
+		return err
+	}
+	req.Method = orig.Method
+	req.Body = body
+	req.ContentLength = orig.ContentLength
+	return nil
 }
 
 type envelope struct {

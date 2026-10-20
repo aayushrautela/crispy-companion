@@ -116,7 +116,7 @@ as part of the source tree:
 
 | Key | Purpose |
 |---|---|
-| `CRISPY_SERVER_URL` | Where the companion phones home to pair (`http://api.crispytv.tech`) |
+| `CRISPY_SERVER_URL` | Where the companion phones home to pair (`https://api.crispytv.tech`) |
 | `CRISPY_ALLOWED_ORIGINS` | Web origins allowed to reach the loopback API (`https://web.crispytv.tech`) |
 
 Locally:
@@ -129,7 +129,7 @@ In CI, set the same two names as repository secrets (Settings → Secrets
 and variables → Actions), or:
 
 ```sh
-gh secret set CRISPY_SERVER_URL --body 'http://api.crispytv.tech'
+gh secret set CRISPY_SERVER_URL --body 'https://api.crispytv.tech'
 gh secret set CRISPY_ALLOWED_ORIGINS --body 'https://web.crispytv.tech'
 ```
 
@@ -142,6 +142,12 @@ Notes:
   fail-closed OSS defaults (no server URL, example origins only).
 - A user's own `config.toml` or `CRISPY_COMPANION_*` env vars always
   override the compiled-in values.
+- **Always use `https://`.** The device-grant poll carries the device code
+  and its reply carries the `cp_pat_`, so neither may travel in cleartext;
+  `internal/config` therefore upgrades a non-loopback `http://` server URL
+  to `https://` on its own. The grant client also replays the request body
+  across an `http→https` redirect (Go would otherwise turn the POST into a
+  GET and the API would answer "must have required property 'clientId'").
 
 ## Status: manifest CI-verified, desktop smoke test pending
 
