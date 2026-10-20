@@ -1,7 +1,9 @@
 # Flatpak packaging (M4)
 
-Primary distribution for Linux. Headless daemon; the `.desktop` entry is
-`NoDisplay` (autostart + `pair show` CLI only).
+Primary distribution for Linux. Headless daemon with a start-menu entry:
+the `.desktop` file is exported to the application menu and reports the
+daemon's state through desktop notifications (autostart + `pair show` CLI
+as well).
 
 ## Permissions rationale
 
@@ -61,19 +63,70 @@ Flatpak cannot open host firewall ports and the default `loopback` mode
 needs none. `shared: raw` LAN mode is the only case that needs a manual
 `firewalld`/`ufw` opening — documented at pair time, never automatic.
 
-## Deployment defaults (GitHub Secrets → CI-injected, never in source)
+## Start menu entry and app icon
 
-Our domains live in repository secrets, not in code. On every build the
-workflow writes them into the gitignored
+The desktop entry is exported to the host's application menu by Flatpak.
+It launches the daemon in menu mode (`--menu-launch`); because the daemon
+is headless, it answers every launch with a desktop notification:
+
+| Situation | Notification |
+|---|---|
+| Fresh start | "Crispy Companion started" |
+| Clicked again while running | "Crispy Companion is already running" (no second engine is spawned) |
+
+The entry is `packaging/flatpak/io.crispy.Companion.desktop`; it must keep
+`NoDisplay` off or the app stays hidden from the menu, and `Icon=` must
+equal the app ID so Flatpak exports the icon to the host.
+
+### Icon formats
+
+The icon name is always the app ID: `io.crispy.Companion`. Two accepted
+layouts (the SVG is the primary one; PNGs are optional fallbacks):
+
+```
+packaging/flatpak/io.crispy.Companion.svg            # hicolor/scalable
+packaging/flatpak/icons/<size>x<size>/io.crispy.Companion.png
+```
+
+Requirements for the SVG:
+
+- square `viewBox` (128×128 or 512×512), no external references, no
+  embedded raster data, transparent background
+- no text that depends on installed fonts
+
+Requirements for the PNGs (if you ship them):
+
+- real PNG files (not renamed SVGs), correct pixel dimensions, transparency
+- useful sizes: 16, 24, 32, 48, 64, 128, 256, 512
+
+The manifest installs every PNG found under `packaging/flatpak/icons/` into
+`hicolor/<size>x<size>/apps/`. To regenerate them from the SVG:
+
+```sh
+scripts/render-icons.sh          # needs rsvg-convert, inkscape or ImageMagick
+```
+
+## Deployment defaults (.env in the tree, secrets in CI, never in source)
+
+Our domains live outside the source tree: locally in `.env` (gitignored,
+see `.env.example`), in CI as repository secrets. `scripts/builddefaults.sh`
+reads them and writes the gitignored
 `internal/config/builddefaults_gen.go`, which the Flatpak manifest picks up
 as part of the source tree:
 
-| Secret | Purpose |
+| Key | Purpose |
 |---|---|
 | `CRISPY_SERVER_URL` | Where the companion phones home to pair (`http://api.crispytv.tech`) |
 | `CRISPY_ALLOWED_ORIGINS` | Web origins allowed to reach the loopback API (`https://web.crispytv.tech`) |
 
-Set/rotate at: repo Settings → Secrets and variables → Actions, or:
+Locally:
+
+```sh
+cp .env.example .env && $EDITOR .env   # then build
+```
+
+In CI, set the same two names as repository secrets (Settings → Secrets
+and variables → Actions), or:
 
 ```sh
 gh secret set CRISPY_SERVER_URL --body 'http://api.crispytv.tech'
@@ -85,7 +138,7 @@ Notes:
 - These are **deployment values, not cryptographic secrets**: every shipped
   bundle must contain them in readable form to function. Secrets are used to
   keep infra URLs out of the public source tree and masked in build logs.
-- Builds without the secrets (forks, PRs) skip injection and keep the
+- Builds without the values (forks, PRs) skip injection and keep the
   fail-closed OSS defaults (no server URL, example origins only).
 - A user's own `config.toml` or `CRISPY_COMPANION_*` env vars always
   override the compiled-in values.

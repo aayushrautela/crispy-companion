@@ -13,11 +13,13 @@
       there is no companion window.
     </p>
   </description>
+  <icon type="stock">io.crispy.Companion</icon>
   <launchable type="desktop-id">io.crispy.Companion.desktop</launchable>
   <provides>
     <id>io.crispy.Companion.desktop</id>
   </provides>
   <releases>
+    <release version="0.2.0" date="2026-10-20"/>
     <release version="0.1.0" date="2026-10-14"/>
   </releases>
   <content_rating type="oars-1.1"/>

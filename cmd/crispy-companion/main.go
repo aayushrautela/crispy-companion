@@ -6,10 +6,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -46,10 +48,11 @@ func run() error {
 	}
 	fs := flag.NewFlagSet("crispy-companion", flag.ContinueOnError)
 	requestAutostart := fs.Bool("request-autostart", false, "ask the desktop (portal) for background + login autostart, then run")
+	menuLaunch := fs.Bool("menu-launch", false, "started from the desktop start-menu entry: report the outcome as a notification")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-	return runDaemon(*requestAutostart)
+	return runDaemon(*requestAutostart, *menuLaunch)
 }
 
 // resolveDataDir applies the CRISPY_COMPANION_DATA_DIR override.
@@ -82,7 +85,7 @@ func pairShow(dataDir string) error {
 	return nil
 }
 
-func runDaemon(requestAutostart bool) error {
+func runDaemon(requestAutostart, menuLaunch bool) error {
 	logger := log.New(os.Stderr, "crispy-companion: ", log.LstdFlags)
 
 	dataDir := resolveDataDir()
@@ -131,6 +134,45 @@ func runDaemon(requestAutostart bool) error {
 	// new pairings fail closed until configured (PLAN D8).
 	grantClient := grant.New(cfg.CrispyServerURL)
 
+	// Prefer portal notifications (with a working Revoke button) when a
+	// session bus exists; otherwise log (Flatpak captures stderr). Wired
+	// before the engine so the start-menu entry can report "already
+	// running" without starting a second engine.
+	var notifier notify.Notifier = notify.LogNotifier{Log: logger}
+	if pc, err := portal.Dial(); err != nil {
+		logger.Printf("portal unavailable, notifications go to log: %v", err)
+	} else {
+		defer pc.Close()
+		notifier = notify.NewPortal(pc, func(id, action string) {
+			if id != "crispy-pairing" || action != "revoke" {
+				return
+			}
+			logger.Printf("revoke requested from notification")
+			_ = tokens.RevokeAll()
+			_ = session.Clear()
+		})
+		if requestAutostart {
+			bg, auto, err := pc.RequestBackground("Keep torrent streaming available in the background", true, 30*time.Second)
+			if err != nil {
+				logger.Printf("autostart request failed: %v", err)
+			} else {
+				logger.Printf("autostart request: background=%v autostart=%v", bg, auto)
+			}
+		}
+	}
+
+	// A second instance (start-menu click, manual run) must never die
+	// silently: if the companion is already up, say so and exit. Without
+	// this the user clicks the icon and nothing at all happens.
+	if probeCompanion(cfg.Addr()) {
+		logger.Printf("companion already running on %s", cfg.Addr())
+		_ = notifier.Post(notify.Notification{
+			Title: "Crispy Companion is already running",
+			Body:  "The local engine is up. Open the Crispy web app to pair or stream.",
+		})
+		return nil
+	}
+
 	eng, err := engine.New(engine.Config{
 		Addr:          cfg.EngineAddr,
 		Port:          cfg.EnginePort,
@@ -155,30 +197,6 @@ func runDaemon(requestAutostart bool) error {
 	mode := "loopback"
 	if cfg.SharedMode != "off" {
 		mode = cfg.SharedMode
-	}
-	// Prefer portal notifications (with a working Revoke button) when a
-	// session bus exists; otherwise log (Flatpak captures stderr).
-	var notifier notify.Notifier = notify.LogNotifier{Log: logger}
-	if pc, err := portal.Dial(); err != nil {
-		logger.Printf("portal unavailable, notifications go to log: %v", err)
-	} else {
-		defer pc.Close()
-		notifier = notify.NewPortal(pc, func(id, action string) {
-			if id != "crispy-pairing" || action != "revoke" {
-				return
-			}
-			logger.Printf("revoke requested from notification")
-			_ = tokens.RevokeAll()
-			_ = session.Clear()
-		})
-		if requestAutostart {
-			bg, auto, err := pc.RequestBackground("Keep torrent streaming available in the background", true, 30*time.Second)
-			if err != nil {
-				logger.Printf("autostart request failed: %v", err)
-			} else {
-				logger.Printf("autostart request: background=%v autostart=%v", bg, auto)
-			}
-		}
 	}
 	buffer := server.BufferConfig{
 		MinBytes:                 cfg.BufferMinBytes,
@@ -221,6 +239,16 @@ func runDaemon(requestAutostart bool) error {
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(context.Background(), "tcp", cfg.Addr())
 	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			// Authoritative "already running": this instance lost the race
+			// for the port. Report it instead of dying silently.
+			logger.Printf("port %s already in use: companion already running", cfg.Addr())
+			_ = notifier.Post(notify.Notification{
+				Title: "Crispy Companion is already running",
+				Body:  "The local engine is up. Open the Crispy web app to pair or stream.",
+			})
+			return nil
+		}
 		return err
 	}
 	// Refuse to run if we somehow bound off-loopback.
@@ -246,6 +274,18 @@ func runDaemon(requestAutostart bool) error {
 			logger.Printf("server error: %v", err)
 		}
 	}()
+
+	// A headless daemon has no window, so the start-menu entry has to
+	// answer the click with something visible. Unconditional: the click
+	// must never look like a no-op, and the flag may not survive the
+	// desktop's Exec rewriting.
+	if menuLaunch {
+		logger.Printf("launched from the start-menu entry")
+	}
+	_ = notifier.Post(notify.Notification{
+		Title: "Crispy Companion started",
+		Body:  "Listening on 127.0.0.1:" + strconv.Itoa(port) + ". Open the Crispy web app to pair this device.",
+	})
 
 	// M5 shared listeners. Loopback always serves; these add a second
 	// surface. The engine stays loopback-only in every mode.
@@ -293,6 +333,24 @@ func serveRaw(cfg config.Config, port int, loopHosts, origins []string, dev bool
 		}
 	}()
 	return nil
+}
+
+// probeCompanion reports whether a Crispy companion daemon is already
+// serving on addr. It asks the daemon's own /companion/ping endpoint and
+// checks the service name, so an unrelated process squatting on the port
+// is not mistaken for a running companion.
+func probeCompanion(addr string) bool {
+	client := &http.Client{Timeout: 750 * time.Millisecond}
+	resp, err := client.Get("http://" + addr + "/companion/ping")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return false
+	}
+	return resp.StatusCode == http.StatusOK && bytes.Contains(body, []byte(`"name":"crispy-companion"`))
 }
 
 func defaultDataDir() string {
