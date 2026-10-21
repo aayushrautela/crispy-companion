@@ -1,5 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <rect x="8" y="8" width="112" height="112" rx="26" fill="#1a1d21"/>
-  <path d="M88 42a30 30 0 1 0 0 44" stroke="#f5a623" stroke-width="13" fill="none" stroke-linecap="round"/>
-  <circle cx="88" cy="64" r="9" fill="#f5a623"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Crispy Companion app icon.
+
+  Same artwork as the Crispy web app brand mark (black disc, red play wedge,
+  white outlined chevron). Geometry is taken from the brand artwork in the
+  Crispy web app: the red wedge and the white chevron are the two paths of
+  the app's favicon.svg, scaled 5.16x onto a 512x512 canvas so the disc is
+  inset-free and the mark keeps its proportions.
+
+  Rules for this file (see packaging/flatpak/README.md):
+    - square viewBox, transparent outside the disc
+    - no external references, no embedded raster, no font-dependent text
+    - icon name must stay io.crispy.Companion (it equals the app ID)
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Crispy Companion">
+  <title>Crispy Companion</title>
+  <circle cx="256" cy="256" r="256" fill="#000000"/>
+  <g transform="translate(108 77.48) scale(5.1698)">
+    <path d="M0 0V50L43 25L0 0Z" fill="#E11D48"/>
+    <path d="M10 15V65L53 40L10 15Z" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
 </svg>

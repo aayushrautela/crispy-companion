@@ -80,13 +80,20 @@ equal the app ID so Flatpak exports the icon to the host.
 
 ### Icon formats
 
-The icon name is always the app ID: `io.crispy.Companion`. Two accepted
-layouts (the SVG is the primary one; PNGs are optional fallbacks):
+The icon is the **Crispy brand mark** (black disc, red play wedge, white
+outlined chevron), taken from the Crispy web app's icon set so the daemon
+reads as part of the same product. The icon name is always the app ID:
+`io.crispy.Companion`. Two accepted layouts (the SVG is the primary one;
+the PNGs are the raster fallbacks):
 
 ```
 packaging/flatpak/io.crispy.Companion.svg            # hicolor/scalable
 packaging/flatpak/icons/<size>x<size>/io.crispy.Companion.png
 ```
+
+The PNG set is committed (16, 24, 32, 48, 64, 128, 256, 512). It was
+rasterized from the web app's own 512×512 master, so the rasters are
+pixel-identical to the brand artwork.
 
 Requirements for the SVG:
 
@@ -100,7 +107,9 @@ Requirements for the PNGs (if you ship them):
 - useful sizes: 16, 24, 32, 48, 64, 128, 256, 512
 
 The manifest installs every PNG found under `packaging/flatpak/icons/` into
-`hicolor/<size>x<size>/apps/`. To regenerate them from the SVG:
+`hicolor/<size>x<size>/apps/`; `appstreamcli` then derives the cached
+appstream icons from the installed scalable icon. To regenerate the PNGs
+from the SVG:
 
 ```sh
 scripts/render-icons.sh          # needs rsvg-convert, inkscape or ImageMagick
