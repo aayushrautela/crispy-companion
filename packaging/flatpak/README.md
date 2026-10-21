@@ -97,6 +97,12 @@ pixel-identical to the brand artwork.
 
 Requirements for the SVG:
 
+- **the file must start with `<svg`** — gdk-pixbuf's SVG loader detects SVGs
+  by the magic ` <svg` / ` <!DOCTYPE svg`, so an XML declaration
+  (`<?xml …?>`) or a comment *before* the root element makes the loader
+  ignore the file. AppStream then fails the Flatpak build with
+  `E: icon-file-read-error` and `E: filters-but-no-output` — the bundles
+  never get built. CI checks the first bytes for you.
 - square `viewBox` (128×128 or 512×512), no external references, no
   embedded raster data, transparent background
 - no text that depends on installed fonts

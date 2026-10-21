@@ -28,6 +28,14 @@ jobs:
           cache: true
       - run: go vet ./...
       - run: go test ./...
+      - name: Validate the scalable icon
+        # gdk-pixbuf detects SVG files by the magic " <svg" (or " <!DOCTYPE
+        # svg"). An XML declaration or a comment before the root element hides
+        # the file from the loader, and the Flatpak build then dies in
+        # appstreamcli with icon-file-read-error / filters-but-no-output.
+        run: |
+          head -c 5 packaging/flatpak/io.crispy.Companion.svg | grep -q '^<svg' \
+            || { echo "::error::the scalable icon must start with <svg"; exit 1; }
 
   flatpak:
     name: Flatpak (${{ matrix.variant.arch }})
