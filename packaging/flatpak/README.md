@@ -113,9 +113,11 @@ Requirements for the PNGs (if you ship them):
 - useful sizes: 16, 24, 32, 48, 64, 128, 256, 512
 
 The manifest installs every PNG found under `packaging/flatpak/icons/` into
-`hicolor/<size>x<size>/apps/`; `appstreamcli` then derives the cached
-appstream icons from the installed scalable icon. To regenerate the PNGs
-from the SVG:
+`hicolor/<size>x<size>/apps/` and the SVG into `hicolor/scalable/apps/`.
+`appstreamcli compose` then exports all of them (scalable icon plus every
+raster size) and rasterizes the SVG into the cached appstream icon sizes
+(120, 150, 180 …), so the app menu shows the brand mark at any size.
+To regenerate the PNGs from the SVG:
 
 ```sh
 scripts/render-icons.sh          # needs rsvg-convert, inkscape or ImageMagick
