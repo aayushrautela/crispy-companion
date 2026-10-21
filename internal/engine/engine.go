@@ -78,8 +78,7 @@ func (s *Supervisor) Start() error {
 		args = append(args, "--maxsize", fmt.Sprint(s.cfg.MaxCacheBytes))
 	}
 	cmd := exec.Command(s.cfg.BinaryPath, args...)
-	cmd.Stdout = nil // M1: inherit nothing; M3 wires ring-buffer logs.
-	cmd.Stderr = nil
+	inheritEngineOutput(cmd)
 	if err := cmd.Start(); err != nil {
 		// A missing binary (exec.ErrNotFound for a bare name resolved
 		// through PATH, os.ErrNotExist for an absolute path) is the common
@@ -95,6 +94,36 @@ func (s *Supervisor) Start() error {
 	s.ok = true
 	s.startErr = nil
 	return nil
+}
+
+// inheritEngineOutput wires the engine's stdout/stderr to the companion's own
+// when the companion itself runs on a terminal, so a foreground launch shows
+// what TorrServer says (tracker and peer activity is the only way to tell a
+// dead torrent from a blocked one). CRISPY_COMPANION_ENGINE_LOG=1 forces it
+// on for non-terminal runs, e.g. `flatpak run … | tee log`.
+//
+// Everywhere else the engine stays quiet: a desktop launch has no terminal,
+// and a child writing to a closed pipe would die from SIGPIPE.
+func inheritEngineOutput(cmd *exec.Cmd) {
+	if os.Getenv("CRISPY_COMPANION_ENGINE_LOG") == "1" {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return
+	}
+	if isTerminal(os.Stdout) || isTerminal(os.Stderr) {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
+}
+
+// isTerminal reports whether f is attached to a character device (a tty or
+// pty). Pipes and files are not.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // StartError reports why the engine could not be started, or nil when it
