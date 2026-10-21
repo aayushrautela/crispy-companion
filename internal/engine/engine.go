@@ -102,8 +102,9 @@ func (s *Supervisor) Start() error {
 // dead torrent from a blocked one). CRISPY_COMPANION_ENGINE_LOG=1 forces it
 // on for non-terminal runs, e.g. `flatpak run … | tee log`.
 //
-// Everywhere else the engine stays quiet: a desktop launch has no terminal,
-// and a child writing to a closed pipe would die from SIGPIPE.
+// Everywhere else the engine stays quiet: a desktop launch gives it
+// /dev/null or a closed pipe, and a child writing to a closed pipe would
+// die from SIGPIPE.
 func inheritEngineOutput(cmd *exec.Cmd) {
 	if os.Getenv("CRISPY_COMPANION_ENGINE_LOG") == "1" {
 		cmd.Stdout = os.Stdout
