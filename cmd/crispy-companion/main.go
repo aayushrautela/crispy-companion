@@ -47,12 +47,13 @@ func run() error {
 		return pairShow(resolveDataDir())
 	}
 	fs := flag.NewFlagSet("crispy-companion", flag.ContinueOnError)
-	requestAutostart := fs.Bool("request-autostart", false, "ask the desktop (portal) for background + login autostart, then run")
+	requestAutostart := fs.Bool("request-autostart", false, "force a Background-portal request for background + login autostart (normally asked once on first start), then run")
+	autostartRun := fs.Bool("autostart-run", false, "started by the desktop's login-autostart entry: serve, but do not ask the portal again")
 	menuLaunch := fs.Bool("menu-launch", false, "started from the desktop start-menu entry: report the outcome as a notification")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-	return runDaemon(*requestAutostart, *menuLaunch)
+	return runDaemon(*requestAutostart, *autostartRun, *menuLaunch)
 }
 
 // resolveDataDir applies the CRISPY_COMPANION_DATA_DIR override.
@@ -85,7 +86,7 @@ func pairShow(dataDir string) error {
 	return nil
 }
 
-func runDaemon(requestAutostart, menuLaunch bool) error {
+func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 	logger := log.New(os.Stderr, "crispy-companion: ", log.LstdFlags)
 
 	dataDir := resolveDataDir()
@@ -139,9 +140,11 @@ func runDaemon(requestAutostart, menuLaunch bool) error {
 	// before the engine so the start-menu entry can report "already
 	// running" without starting a second engine.
 	var notifier notify.Notifier = notify.LogNotifier{Log: logger}
-	if pc, err := portal.Dial(); err != nil {
+	var pc *portal.Conn
+	if c, err := portal.Dial(); err != nil {
 		logger.Printf("portal unavailable, notifications go to log: %v", err)
 	} else {
+		pc = c
 		defer pc.Close()
 		notifier = notify.NewPortal(pc, func(id, action string) {
 			if id != "crispy-pairing" || action != "revoke" {
@@ -151,14 +154,6 @@ func runDaemon(requestAutostart, menuLaunch bool) error {
 			_ = tokens.RevokeAll()
 			_ = session.Clear()
 		})
-		if requestAutostart {
-			bg, auto, err := pc.RequestBackground("Keep torrent streaming available in the background", true, 30*time.Second)
-			if err != nil {
-				logger.Printf("autostart request failed: %v", err)
-			} else {
-				logger.Printf("autostart request: background=%v autostart=%v", bg, auto)
-			}
-		}
 	}
 
 	// A second instance (start-menu click, manual run) must never die
@@ -296,6 +291,23 @@ func runDaemon(requestAutostart, menuLaunch bool) error {
 		}
 	}
 
+	// Pika Backup-style background handling (best-effort, portal only):
+	// declare that this process is intentionally running in the
+	// background, then ask the desktop once for login autostart. Both
+	// happen after the listeners are up so a second instance ("already
+	// running" above) never triggers a portal dialog, and no listener
+	// waits for the user to answer the dialog.
+	//
+	// autostartRun means the desktop started us from its own autostart
+	// entry: the permission is granted by definition, so asking again
+	// would only nag.
+	if pc != nil {
+		_ = pc.SetStatus("Torrent streaming ready")
+		if !autostartRun {
+			ensureAutostart(pc, requestAutostart, portal.BackgroundStatePath(dataDir), logger)
+		}
+	}
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
@@ -307,6 +319,55 @@ func runDaemon(requestAutostart, menuLaunch bool) error {
 		_ = s.Shutdown(ctx)
 	}
 	return nil
+}
+
+// autostartCommand is what the desktop writes into the login-autostart
+// entry. It must be the plain serve command: the exported start-menu
+// entry carries --menu-launch, and the portal falls back to that Exec
+// key when no commandline is passed (which would make the login start
+// look like a menu click).
+//
+// --autostart-run tells the daemon it was started by the desktop's own
+// autostart entry, so it serves without asking the portal a second time.
+var autostartCommand = []string{"crispy-companion", "--autostart-run"}
+
+// autostartReason is shown to the user in the desktop's dialog.
+const autostartReason = "Keep torrent streaming available in the background"
+
+// ensureAutostart asks the desktop to run the companion in the background
+// and start it at login, the way Pika Backup asks its desktop.
+//
+// The portal shows a dialog per request, so the answer is recorded in
+// the data dir and never asked again: granted and refused both settle
+// the question. A failed request settles nothing — the next start asks
+// again. force (--request-autostart) always asks, which is the way back
+// after the user revoked the app in desktop Settings.
+//
+// dbus-activatable stays false: the companion has no D-Bus activation
+// service, and activating through D-Bus would start the app through the
+// desktop file rather than the pinned command.
+func ensureAutostart(pc *portal.Conn, force bool, statePath string, logger *log.Logger) {
+	if !force {
+		if st, ok := portal.ReadBackgroundState(statePath); ok && st.Settled() {
+			return
+		}
+	}
+	bg, auto, err := pc.RequestBackground(autostartReason, true, autostartCommand, false, 30*time.Second)
+	now := time.Now().UTC()
+	switch {
+	case err != nil:
+		logger.Printf("autostart request failed: %v", err)
+	case bg && auto:
+		logger.Printf("autostart granted: the companion will start at login")
+		if err := portal.WriteBackgroundState(statePath, portal.BackgroundState{Granted: true, RequestedAt: now}); err != nil {
+			logger.Printf("could not record the autostart answer: %v", err)
+		}
+	default:
+		logger.Printf("background/autostart refused (background=%v autostart=%v); force another request with --request-autostart", bg, auto)
+		if err := portal.WriteBackgroundState(statePath, portal.BackgroundState{Refused: true, RequestedAt: now}); err != nil {
+			logger.Printf("could not record the autostart answer: %v", err)
+		}
+	}
 }
 
 // serveRaw serves plaintext HTTP on the configured LAN address (validated

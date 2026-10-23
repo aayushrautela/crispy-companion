@@ -1,7 +1,9 @@
 package portal_test
 
 import (
+	"os"
 	"testing"
+	"time"
 
 	"github.com/crispy-streaming/crispy-companion/internal/portal"
 	"github.com/godbus/dbus/v5"
@@ -37,7 +39,7 @@ func TestNotificationPayloadNoButtons(t *testing.T) {
 }
 
 func TestBackgroundOptions(t *testing.T) {
-	o := portal.BackgroundOptions("Keep streaming available", true, "crispy1")
+	o := portal.BackgroundOptions("Keep streaming available", true, []string{"crispy-companion"}, false, "crispy1")
 	if o["reason"].Value().(string) != "Keep streaming available" {
 		t.Fatalf("reason: %+v", o["reason"])
 	}
@@ -46,6 +48,55 @@ func TestBackgroundOptions(t *testing.T) {
 	}
 	if o["handle_token"].Value().(string) != "crispy1" {
 		t.Fatalf("handle_token: %+v", o["handle_token"])
+	}
+	// The autostart entry must pin the plain serve command: without it
+	// the portal falls back to the desktop file's Exec (--menu-launch).
+	cmd, ok := o["commandline"].Value().([]string)
+	if !ok || len(cmd) != 1 || cmd[0] != "crispy-companion" {
+		t.Fatalf("commandline: %+v", o["commandline"])
+	}
+	if _, ok := o["dbus-activatable"]; ok {
+		t.Fatal("dbus-activatable must be absent when false")
+	}
+}
+
+func TestBackgroundOptionsWithoutCommandline(t *testing.T) {
+	o := portal.BackgroundOptions("r", false, nil, true, "t")
+	if _, ok := o["commandline"]; ok {
+		t.Fatal("commandline must be absent when empty")
+	}
+	if !o["dbus-activatable"].Value().(bool) {
+		t.Fatal("dbus-activatable must be true")
+	}
+}
+
+func TestBackgroundStateRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := portal.BackgroundStatePath(dir)
+	if _, ok := portal.ReadBackgroundState(path); ok {
+		t.Fatal("absent state must read as not present")
+	}
+	st := portal.BackgroundState{Granted: true, RequestedAt: time.Now().UTC().Truncate(time.Second)}
+	if err := portal.WriteBackgroundState(path, st); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	got, ok := portal.ReadBackgroundState(path)
+	if !ok {
+		t.Fatal("state must be readable after writing")
+	}
+	if !got.Granted || !got.Settled() {
+		t.Fatalf("state: %+v", got)
+	}
+}
+
+func TestBackgroundStateUnreadableIsUnsettled(t *testing.T) {
+	dir := t.TempDir()
+	path := portal.BackgroundStatePath(dir)
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := portal.ReadBackgroundState(path); ok {
+		t.Fatal("a corrupt state file must read as not present")
 	}
 }
 

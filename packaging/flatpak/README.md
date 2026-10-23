@@ -11,7 +11,7 @@ as well).
 |---|---|
 | `--share=network` | Bind `:11470` loopback + reach trackers/peers + crispy-server TLS. Required. Ports >1024 need nothing else. |
 | `--talk-name=org.freedesktop.portal.Desktop` | Pairing/result notifications with Revoke action (Notification portal). |
-| `--talk-name=org.freedesktop.portal.Background` | Optional autostart (`--request-autostart`); user revocable in Settings. |
+| `--talk-name=org.freedesktop.portal.Background` | Login autostart, requested once on first start; user revocable in Settings. |
 | `--filesystem=xdg-data/crispy-companion` | The ONLY host filesystem access: tokens, config, engine cache. No `home:`, no `host:`. |
 
 No X11/Wayland sockets: there is no GUI. No `--device=all`, no DRI.
@@ -38,12 +38,35 @@ To bump the engine: update both URLs + sha256 pins in
 
 ## Autostart
 
+The companion asks the desktop's Background portal itself, on its first
+successful start, to run in the background and start at login — the same
+flow Pika Backup uses. The request carries the plain serve command as
+`commandline` (without it the portal falls back to the desktop file's
+`Exec`, i.e. the `--menu-launch` start-menu entry) and keeps
+`dbus-activatable` false (there is no D-Bus activation service). The
+commandline ends in `--autostart-run`, so the login start serves
+without asking the portal again.
+
+The portal shows a dialog per request, so the answer is recorded in
+`background-portal.json` in the data dir and never asked again:
+
+| Answer | Effect |
+|---|---|
+| granted | The daemon starts at login; the desktop writes the autostart entry |
+| refused | The daemon stays quiet from then on — no nag dialog at every start |
+| request failed | Asked again on the next start |
+
+Force a new round (e.g. after revoking the app in desktop Settings,
+which removes the autostart entry but not the recorded answer):
+
 ```sh
 flatpak run io.crispy.Companion --request-autostart
 ```
 
-One-shot: requests Background portal autostart, then serves. Revoke any
-time in desktop Settings → Apps → Crispy Companion.
+Revoke any time in desktop Settings → Apps → Crispy Companion.
+
+On a plain (non-Flatpak) install there is no portal request to make;
+use the XDG autostart entry instead — see `../linux/README.md`.
 
 ## Pairing without notifications
 

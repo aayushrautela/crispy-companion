@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Crispy Companion
+Comment=Local torrent streaming engine for Crispy
+Exec=crispy-companion --autostart-run
+Icon=io.crispy.Companion
+Terminal=false
+StartupNotify=false
+# Autostart-only entry: it must not show up in any menu.
+NoDisplay=true
+# Deferred start so the login does not wait for the companion.
+X-GNOME-Autostart-Delay=90
+# The daemon talks to the user through desktop notifications.
+X-GNOME-UsesNotifications=true

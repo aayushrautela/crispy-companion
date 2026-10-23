@@ -116,23 +116,41 @@ func (c *Conn) OnAction(fn func(notificationID, action string)) error {
 }
 
 // BackgroundOptions builds the a{sv} options for RequestBackground.
+//
+// commandline is what the desktop writes into the login-autostart entry
+// (spec: without it the Exec key of the app's desktop file is used — for
+// the Flatpak build that is the start-menu entry with --menu-launch, not
+// the plain serve command, so it must always be passed explicitly, the
+// way Pika Backup passes its daemon binary). dbusActivatable must stay
+// false: the companion has no D-Bus activation service, and autostart
+// through D-Bus would route the login start through the desktop file
+// again.
+//
 // Pure (no I/O) so it is unit-testable without a bus.
-func BackgroundOptions(reason string, autostart bool, handleToken string) map[string]dbus.Variant {
-	return map[string]dbus.Variant{
+func BackgroundOptions(reason string, autostart bool, commandline []string, dbusActivatable bool, handleToken string) map[string]dbus.Variant {
+	o := map[string]dbus.Variant{
 		"handle_token": dbus.MakeVariant(handleToken),
 		"reason":       dbus.MakeVariant(reason),
 		"autostart":    dbus.MakeVariant(autostart),
 	}
+	if len(commandline) > 0 {
+		o["commandline"] = dbus.MakeVariant(commandline)
+	}
+	if dbusActivatable {
+		o["dbus-activatable"] = dbus.MakeVariant(dbusActivatable)
+	}
+	return o
 }
 
 // RequestBackground asks the desktop to allow background running and,
-// if autostart is true, login autostart. parentWindow is "" (no window).
+// if autostart is true, login autostart (see BackgroundOptions for the
+// commandline / dbusActivatable pair). parentWindow is "" (no window).
 // It blocks up to timeout waiting for the Request Response signal.
-func (c *Conn) RequestBackground(reason string, autostart bool, timeout time.Duration) (background, autostartGranted bool, err error) {
+func (c *Conn) RequestBackground(reason string, autostart bool, commandline []string, dbusActivatable bool, timeout time.Duration) (background, autostartGranted bool, err error) {
 	token := fmt.Sprintf("crispy%d", time.Now().UnixNano())
 	obj := c.conn.Object(busName, dbus.ObjectPath(objectPath))
 	var handle dbus.ObjectPath
-	if err := obj.Call(ifaceBg+".RequestBackground", 0, "", BackgroundOptions(reason, autostart, token)).Store(&handle); err != nil {
+	if err := obj.Call(ifaceBg+".RequestBackground", 0, "", BackgroundOptions(reason, autostart, commandline, dbusActivatable, token)).Store(&handle); err != nil {
 		return false, false, err
 	}
 	ch := make(chan *dbus.Signal, 4)
@@ -162,6 +180,18 @@ func (c *Conn) RequestBackground(reason string, autostart bool, timeout time.Dur
 			return false, false, errors.New("portal: background request timed out")
 		}
 	}
+}
+
+// SetStatus tells the desktop what the daemon is doing while it runs in
+// the background (Background v2). GNOME/KDE show this message next to the
+// app instead of treating the process as a stray to be killed — the same
+// call Pika Backup's monitor makes at startup. Errors are the caller's to
+// ignore: without the background permission the call is simply rejected.
+func (c *Conn) SetStatus(message string) error {
+	obj := c.conn.Object(busName, dbus.ObjectPath(objectPath))
+	return obj.Call(ifaceBg+".SetStatus", 0, map[string]dbus.Variant{
+		"message": dbus.MakeVariant(message),
+	}).Err
 }
 
 func variantBool(m map[string]dbus.Variant, key string) bool {
