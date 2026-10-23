@@ -1,12 +1,20 @@
-# macOS packaging (M4 draft — not yet built)
+# macOS packaging
 
-## Layout (`crispy-companion-macos-universal.tar.gz`)
+## Layout (`crispy-companion-macos-{arm64,amd64}.tar.gz`)
+
+Each tarball carries the same universal companion binary; the engine differs
+by arch (ship per-arch tarballs OR pick at install):
 
 ```
 crispy-companion               # universal binary (arm64 + x86_64 via lipo)
-torrserver                     # pinned MatriX.146.1 darwin artefact per arch (ship per-arch zips OR pick at install)
-config.toml                    # seed: loopback defaults, empty crispyServer.url (fail-closed)
+torrserver                     # pinned MatriX.146.1 darwin artefact for this arch
+config.toml                    # seed: loopback defaults, empty crispyServer.url (fail-closed; copy into the data dir to take effect)
+README.md                      # this file
 ```
+
+CI (.github/workflows/macos.yml) builds and checksums both tarballs on the
+macOS runners, smoke-runs the daemon to prove the LaunchAgent is written,
+and attaches them to tagged releases. The same steps by hand:
 
 ```sh
 GOOS=darwin GOARCH=arm64 go build -trimpath -o crispy-companion-arm64 ./cmd/crispy-companion
@@ -64,5 +72,7 @@ by design, never silently bypassed.
 
 ## Status
 
-Draft. First acceptance: tarball on Apple Silicon + Intel, pair against
-staging, notification bridge filed as post-M4.
+Tarballs build in CI (.github/workflows/macos.yml), which also smoke-runs
+the daemon to prove the LaunchAgent and autostart.json are written. First
+acceptance: pair against staging on Apple Silicon + Intel; notification
+bridge filed as post-M4.

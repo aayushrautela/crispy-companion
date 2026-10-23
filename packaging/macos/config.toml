@@ -1,0 +1,26 @@
+# Crispy Companion — seed configuration (macOS).
+#
+# The daemon reads the config file for its data dir:
+#   ~/Library/Application Support/Crispy Companion/config.toml
+# Copy this file there, or point CRISPY_COMPANION_CONFIG at it.
+#
+# Every value below is the built-in default; keep only what you change.
+# crispyServer.url stays empty: pairing is disabled until you set it here,
+# in CRISPY_COMPANION_SERVER_URL, or through a build that carries
+# deployment defaults. The listener and the engine stay loopback-only.
+
+[listen]
+addr = "127.0.0.1"
+port = 11470
+
+[engine]
+addr = "127.0.0.1"
+port = 8090
+autoStart = true
+binaryPath = "torrserver"
+
+[crispyServer]
+url = ""
+
+[logging]
+level = "info"

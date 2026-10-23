@@ -1,0 +1,129 @@
+# Builds the macOS tarballs on every push/PR and attaches them to tagged
+# releases (v*), mirroring packaging/macos/README.md:
+#
+#   crispy-companion   universal binary (arm64 + x86_64 via lipo)
+#   torrserver         MatriX.146.1 darwin artefact for that arch
+#   config.toml        loopback defaults, empty crispyServer.url (fail-closed)
+#   README.md          packaging/macos/README.md
+#
+# One tarball per arch (the engine is per-arch) and each carries the same
+# universal companion. Go is vendored (GOFLAGS=-mod=vendor, CGO_ENABLED=0):
+# the only download is the SHA256-pinned engine.
+name: macOS
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # release job needs this to attach tarballs
+
+jobs:
+  test:
+    name: Go tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./...
+
+  build:
+    name: macOS universal
+    needs: test
+    runs-on: macos-latest
+    env:
+      TORRSERVER_VERSION: MatriX.146.1
+      TORRSERVER_SHA_ARM64: a9995fe6f9a2766d8db1fe3ab2e201108fb787c27563831307d4d2e9d29b6fb7
+      TORRSERVER_SHA_AMD64: 6010b5bd8b7541b014522b8dbf1d8a3429de3133daed67dc2a5c84736efd4065
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Inject deployment defaults
+        # Same secrets as the Flatpak build: release tarballs phone home to
+        # our server and trust our web origin out of the box. Fork/PR builds
+        # keep fail-closed OSS defaults.
+        env:
+          CRISPY_SERVER_URL: ${{ secrets.CRISPY_SERVER_URL }}
+          CRISPY_ALLOWED_ORIGINS: ${{ secrets.CRISPY_ALLOWED_ORIGINS }}
+        run: bash scripts/builddefaults.sh
+      - name: Build the universal companion
+        run: |
+          set -euo pipefail
+          version="$(git describe --tags --always 2>/dev/null || echo 0.1.0-dev)"
+          ldflags="-s -w -X github.com/crispy-streaming/crispy-companion/internal/server.Version=$version"
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o crispy-companion-arm64 ./cmd/crispy-companion
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o crispy-companion-amd64 ./cmd/crispy-companion
+          lipo -create -output crispy-companion crispy-companion-arm64 crispy-companion-amd64
+          lipo -info crispy-companion
+      - name: Smoke-run on macOS (autostart registration)
+        # Proves the LaunchAgent path end to end on a real Mac: first start
+        # writes ~/Library/LaunchAgents/io.crispy.Companion.plist launching
+        # `--autostart-run` and records the outcome in autostart.json.
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            arm64) bin=./crispy-companion-arm64 ;;
+            x86_64) bin=./crispy-companion-amd64 ;;
+            *) echo "::error::unexpected runner arch $(uname -m)"; exit 1 ;;
+          esac
+          data="$(mktemp -d)"
+          CRISPY_COMPANION_DATA_DIR="$data" "$bin" &
+          pid=$!
+          sleep 5
+          kill -TERM "$pid" || true
+          wait "$pid" || true
+          plist="$HOME/Library/LaunchAgents/io.crispy.Companion.plist"
+          test -f "$plist" || { echo "::error::LaunchAgent was not written"; exit 1; }
+          grep -q -- "--autostart-run" "$plist" || { echo "::error::LaunchAgent does not launch with --autostart-run"; exit 1; }
+          grep -q '"enabled": true' "$data/autostart.json" || { echo "::error::autostart.json does not record the registration"; exit 1; }
+          # Leave no loaded agent behind (KeepAlive would keep restarting it).
+          launchctl bootout "gui/$UID/io.crispy.Companion" 2>/dev/null || true
+      - name: Fetch the pinned TorrServer engine
+        run: |
+          set -euo pipefail
+          base="https://github.com/YouROK/TorrServer/releases/download/$TORRSERVER_VERSION"
+          curl -fsSLo torrserver-arm64 "$base/TorrServer-darwin-arm64"
+          curl -fsSLo torrserver-amd64 "$base/TorrServer-darwin-amd64"
+          echo "$TORRSERVER_SHA_ARM64  torrserver-arm64" | shasum -a 256 -c -
+          echo "$TORRSERVER_SHA_AMD64  torrserver-amd64" | shasum -a 256 -c -
+          chmod +x torrserver-arm64 torrserver-amd64
+      - name: Assemble the tarballs
+        run: |
+          set -euo pipefail
+          for arch in arm64 amd64; do
+            dir="crispy-companion-macos-$arch"
+            mkdir "$dir"
+            cp crispy-companion "$dir/"
+            cp "torrserver-$arch" "$dir/torrserver"
+            cp packaging/macos/config.toml packaging/macos/README.md "$dir/"
+            tar -czf "$dir.tar.gz" "$dir"
+          done
+          ls -l crispy-companion-macos-*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: crispy-companion-macos
+          path: crispy-companion-macos-*.tar.gz
+
+  release:
+    name: Attach tarballs to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: crispy-companion-macos-*.tar.gz
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: crispy-companion-macos-*.tar.gz
