@@ -7,14 +7,17 @@
     <key>ProgramArguments</key>
     <array>
         <string>/Applications/Crispy Companion/crispy-companion</string>
+        <string>--autostart-run</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>WorkingDirectory</key>
+    <string>/Applications/Crispy Companion</string>
     <key>StandardOutPath</key>
-    <string>/tmp/io.crispy.Companion.out.log</string>
+    <string>/Users/YOU/Library/Logs/Crispy Companion/crispy-companion.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/io.crispy.Companion.err.log</string>
+    <string>/Users/YOU/Library/Logs/Crispy Companion/crispy-companion.err.log</string>
 </dict>
 </plist>

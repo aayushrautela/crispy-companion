@@ -16,14 +16,35 @@ lipo -create -output crispy-companion crispy-companion-arm64 crispy-companion-am
 
 ## Autostart (LaunchAgent, user scope)
 
-`packaging/macos/io.crispy.Companion.plist` → `~/Library/LaunchAgents/`:
+Automatic: on the first start the daemon writes
+`~/Library/LaunchAgents/io.crispy.Companion.plist` itself and loads it with
+`launchctl bootstrap gui/$UID` (falling back to `launchctl load -w`), then
+records the outcome in `<data dir>/autostart.json`. The user is not asked —
+macOS has no portal dialog to ask one, unlike the Linux Flatpak.
+
+The written agent mirrors `packaging/macos/io.crispy.Companion.plist`:
+
+- launches `crispy-companion --autostart-run` — the flag tells the daemon
+  it was started by the OS, so it serves without registering again;
+- `RunAtLoad` + `KeepAlive`, so it starts at login and restarts if it dies;
+- `WorkingDirectory` = the folder holding the binary, so the `torrserver`
+  shipped next to it is found even though launchd starts agents with CWD
+  `/`;
+- logs to `~/Library/Logs/Crispy Companion/`.
+
+The plist in this directory is the reference shape (its log paths carry a
+`/Users/YOU` placeholder) and stays useful for a manual install or when
+scripting one.
 
 ```sh
+# exactly what the daemon does, by hand:
 cp packaging/macos/io.crispy.Companion.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/io.crispy.Companion.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/io.crispy.Companion.plist
 ```
 
-`KeepAlive=true`, stoppable via `launchctl unload`. No root daemon.
+Stopped with `launchctl bootout gui/$UID/io.crispy.Companion`. Re-arrange
+after a manual removal with `crispy-companion --request-autostart`. No root
+daemon.
 
 ## Notifications
 

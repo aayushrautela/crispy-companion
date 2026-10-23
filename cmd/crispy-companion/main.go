@@ -18,11 +18,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/crispy-streaming/crispy-companion/internal/autostart"
 	"github.com/crispy-streaming/crispy-companion/internal/config"
 	"github.com/crispy-streaming/crispy-companion/internal/engine"
 	"github.com/crispy-streaming/crispy-companion/internal/grant"
@@ -47,8 +49,8 @@ func run() error {
 		return pairShow(resolveDataDir())
 	}
 	fs := flag.NewFlagSet("crispy-companion", flag.ContinueOnError)
-	requestAutostart := fs.Bool("request-autostart", false, "force a Background-portal request for background + login autostart (normally asked once on first start), then run")
-	autostartRun := fs.Bool("autostart-run", false, "started by the desktop's login-autostart entry: serve, but do not ask the portal again")
+	requestAutostart := fs.Bool("request-autostart", false, "force a login-autostart request (normally arranged once on first start), then run")
+	autostartRun := fs.Bool("autostart-run", false, "started by the login-autostart entry: serve, but do not arrange autostart again")
 	menuLaunch := fs.Bool("menu-launch", false, "started from the desktop start-menu entry: report the outcome as a notification")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
@@ -291,21 +293,21 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 		}
 	}
 
-	// Pika Backup-style background handling (best-effort, portal only):
-	// declare that this process is intentionally running in the
-	// background, then ask the desktop once for login autostart. Both
-	// happen after the listeners are up so a second instance ("already
-	// running" above) never triggers a portal dialog, and no listener
-	// waits for the user to answer the dialog.
+	// Pika Backup-style background handling (best-effort): declare that
+	// this process is intentionally running in the background, then
+	// arrange login autostart once. Both happen after the listeners are
+	// up so a second instance ("already running" above) never triggers a
+	// portal dialog, and no listener waits for the user to answer the
+	// dialog.
 	//
-	// autostartRun means the desktop started us from its own autostart
-	// entry: the permission is granted by definition, so asking again
-	// would only nag.
+	// autostartRun means the OS started us from its own autostart entry:
+	// autostart is on by definition, so arranging it again would only
+	// nag.
 	if pc != nil {
 		_ = pc.SetStatus("Torrent streaming ready")
-		if !autostartRun {
-			ensureAutostart(pc, requestAutostart, portal.BackgroundStatePath(dataDir), logger)
-		}
+	}
+	if !autostartRun {
+		ensureAutostart(pc, requestAutostart, dataDir, logger)
 	}
 
 	sig := make(chan os.Signal, 1)
@@ -334,40 +336,74 @@ var autostartCommand = []string{"crispy-companion", "--autostart-run"}
 // autostartReason is shown to the user in the desktop's dialog.
 const autostartReason = "Keep torrent streaming available in the background"
 
-// ensureAutostart asks the desktop to run the companion in the background
-// and start it at login, the way Pika Backup asks its desktop.
+// ensureAutostart arranges login autostart the way the platform expects,
+// once: the desktop portal on Linux (a real dialog, recorded either way),
+// the platform's own registration elsewhere — a LaunchAgent on macOS, the
+// HKCU Run value on Windows, the XDG entry on a Linux host without a
+// portal (no bus, or a bus with no portal behind the name).
 //
-// The portal shows a dialog per request, so the answer is recorded in
-// the data dir and never asked again: granted and refused both settle
-// the question. A failed request settles nothing — the next start asks
-// again. force (--request-autostart) always asks, which is the way back
-// after the user revoked the app in desktop Settings.
+// The answer is recorded in the data dir and never asked again: enabled
+// and refused both settle the question. A failed attempt settles nothing —
+// the next start retries. force (--request-autostart) always tries again,
+// which is the way back after the user revoked autostart in the OS or
+// desktop settings.
 //
 // dbus-activatable stays false: the companion has no D-Bus activation
 // service, and activating through D-Bus would start the app through the
 // desktop file rather than the pinned command.
-func ensureAutostart(pc *portal.Conn, force bool, statePath string, logger *log.Logger) {
+func ensureAutostart(pc *portal.Conn, force bool, dataDir string, logger *log.Logger) {
+	statePath := autostart.StatePath(dataDir)
 	if !force {
-		if st, ok := portal.ReadBackgroundState(statePath); ok && st.Settled() {
+		if st, ok := autostart.ReadState(statePath); ok && st.Settled() {
 			return
 		}
 	}
-	bg, auto, err := pc.RequestBackground(autostartReason, true, autostartCommand, false, 30*time.Second)
 	now := time.Now().UTC()
-	switch {
-	case err != nil:
-		logger.Printf("autostart request failed: %v", err)
-	case bg && auto:
-		logger.Printf("autostart granted: the companion will start at login")
-		if err := portal.WriteBackgroundState(statePath, portal.BackgroundState{Granted: true, RequestedAt: now}); err != nil {
-			logger.Printf("could not record the autostart answer: %v", err)
-		}
-	default:
-		logger.Printf("background/autostart refused (background=%v autostart=%v); force another request with --request-autostart", bg, auto)
-		if err := portal.WriteBackgroundState(statePath, portal.BackgroundState{Refused: true, RequestedAt: now}); err != nil {
+	record := func(st autostart.State) {
+		if err := autostart.WriteState(statePath, st); err != nil {
 			logger.Printf("could not record the autostart answer: %v", err)
 		}
 	}
+
+	if pc != nil {
+		bg, auto, err := pc.RequestBackground(autostartReason, true, autostartCommand, false, 30*time.Second)
+		switch {
+		case err == nil && bg && auto:
+			logger.Printf("autostart granted: the companion will start at login")
+			record(autostart.State{Enabled: true, Method: autostart.MethodPortal, RequestedAt: now})
+			return
+		case err == nil:
+			logger.Printf("background/autostart refused (background=%v autostart=%v); force another request with --request-autostart", bg, auto)
+			record(autostart.State{Refused: true, RequestedAt: now})
+			return
+		case !portal.Unavailable(err):
+			// A real answer failed, was cancelled or timed out. No state:
+			// the next start asks again. No direct fallback either — on a
+			// desktop the entry must come from the user's answer, not
+			// around it.
+			logger.Printf("autostart request failed: %v", err)
+			return
+		}
+		// The bus is there but no portal owns the name: nobody can ask
+		// the user, so fall through to the plain entry below.
+		logger.Printf("desktop portal unavailable (%v): registering the autostart entry directly", err)
+	}
+
+	// No portal at all: macOS and Windows always land here, Linux on
+	// hosts whose session has no desktop portal.
+	exe, err := os.Executable()
+	if err != nil {
+		logger.Printf("autostart registration failed: cannot locate the companion binary: %v", err)
+		return
+	}
+	method, err := autostart.Register(exe, logger)
+	if err != nil {
+		// No state: the next start retries.
+		logger.Printf("autostart registration failed: %v", err)
+		return
+	}
+	logger.Printf("autostart registered (%s): the companion will start at login", method)
+	record(autostart.State{Enabled: true, Method: method, RequestedAt: now})
 }
 
 // serveRaw serves plaintext HTTP on the configured LAN address (validated
@@ -414,7 +450,21 @@ func probeCompanion(addr string) bool {
 	return resp.StatusCode == http.StatusOK && bytes.Contains(body, []byte(`"name":"crispy-companion"`))
 }
 
+// defaultDataDir is the per-user state directory, matching what the
+// packaging READMEs document: %LOCALAPPDATA%\Crispy Companion on Windows,
+// ~/Library/Application Support/Crispy Companion on macOS, and the XDG
+// data dir on Linux and everything else.
 func defaultDataDir() string {
+	switch runtime.GOOS {
+	case "windows":
+		if dir := os.Getenv("LOCALAPPDATA"); dir != "" {
+			return filepath.Join(dir, "Crispy Companion")
+		}
+	case "darwin":
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, "Library", "Application Support", "Crispy Companion")
+		}
+	}
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		return filepath.Join(xdg, "crispy-companion")
 	}

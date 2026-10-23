@@ -3,8 +3,10 @@
 For distro packages and tarball installs. The Flatpak bundle gets its
 login autostart from the desktop's Background portal (see
 `../flatpak/README.md`); a plain install has no portal request to make,
-so it ships an XDG autostart entry instead — the same pattern Pika
-Backup uses for its monitor daemon.
+so it ships the XDG autostart entry below (distro packages, system
+scope) — the same pattern Pika Backup uses for its monitor daemon. On a
+host without a reachable portal the daemon also writes that entry itself
+at user scope, on the first start (see "Self-registration" below).
 
 ## Autostart (XDG, system scope)
 
@@ -38,6 +40,20 @@ Remove the file to disable. The daemon is idempotent: a second start
 finds the running instance and exits with an "already running"
 notification, so a leftover autostart entry can never spawn two
 engines.
+
+## Self-registration (no portal, no package)
+
+Where the desktop offers no Background portal, the daemon writes the
+same entry itself into `~/.config/autostart/io.crispy.Companion.desktop`
+(`$XDG_CONFIG_HOME` honoured) on the first start, with
+`Exec=<absolute path to the binary> --autostart-run`, and records the
+outcome in `<data dir>/autostart.json` so it never rewrites or nags.
+`--request-autostart` forces one fresh attempt — the way back after the
+file was deleted on purpose.
+
+A user-scope entry shadows a system-scope file of the same name (XDG
+spec), so a package-installed `/etc/xdg/autostart/` entry and a
+self-registered one never both start the daemon.
 
 ## Permissions
 

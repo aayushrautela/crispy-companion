@@ -23,6 +23,7 @@ package portal
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -192,6 +193,45 @@ func (c *Conn) SetStatus(message string) error {
 	return obj.Call(ifaceBg+".SetStatus", 0, map[string]dbus.Variant{
 		"message": dbus.MakeVariant(message),
 	}).Err
+}
+
+// Unavailable reports whether err means the desktop portal is not there
+// at all: the session bus answered, but nothing owns the portal name and
+// it cannot be activated — a session without xdg-desktop-portal, a bare
+// bus like CI's, or an old portal with no Background interface.
+//
+// Callers use it to tell "nobody can ask the user" (fall back to the
+// plain autostart entry) from a request that failed or was dismissed
+// (retry next start; never bypass the user's consent).
+func Unavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var derr dbus.Error
+	if errors.As(err, &derr) && missingName(derr.Name) {
+		return true
+	}
+	// godbus has returned the error both by value and by pointer across
+	// versions; accept either.
+	var pderr *dbus.Error
+	if errors.As(err, &pderr) && pderr != nil && missingName(pderr.Name) {
+		return true
+	}
+	// "The name is not activatable" comes from the bus itself for a name
+	// with neither an owner nor a D-Bus activation service file.
+	return strings.Contains(err.Error(), "not activatable")
+}
+
+func missingName(name string) bool {
+	switch name {
+	case "org.freedesktop.DBus.Error.ServiceUnknown",
+		"org.freedesktop.DBus.Error.NameHasNoOwner",
+		"org.freedesktop.DBus.Error.UnknownInterface",
+		"org.freedesktop.DBus.Error.UnknownMethod",
+		"org.freedesktop.DBus.Error.UnknownObject":
+		return true
+	}
+	return false
 }
 
 func variantBool(m map[string]dbus.Variant, key string) bool {

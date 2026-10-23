@@ -14,6 +14,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -77,7 +80,7 @@ func (s *Supervisor) Start() error {
 	if s.cfg.MaxCacheBytes > 0 {
 		args = append(args, "--maxsize", fmt.Sprint(s.cfg.MaxCacheBytes))
 	}
-	cmd := exec.Command(s.cfg.BinaryPath, args...)
+	cmd := exec.Command(resolveBinary(s.cfg.BinaryPath, exeDir()), args...)
 	inheritEngineOutput(cmd)
 	if err := cmd.Start(); err != nil {
 		// A missing binary (exec.ErrNotFound for a bare name resolved
@@ -94,6 +97,45 @@ func (s *Supervisor) Start() error {
 	s.ok = true
 	s.startErr = nil
 	return nil
+}
+
+// exeDir is the directory of the running companion binary, or "" when it
+// cannot be determined.
+func exeDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
+// resolveBinary finds the engine binary. A path with a separator is used
+// as configured. A bare name ("torrserver") resolves through PATH first,
+// the way a terminal launch works, and then next to the companion binary:
+// the packaged Windows and macOS installs ship torrserver.exe / torrserver
+// beside the companion, but the OS autostart launch has no useful PATH or
+// working directory of its own (launchd starts agents with CWD "/", the
+// Windows Run value starts them with CWD system32).
+//
+// When nothing matches, the configured name is returned and exec reports
+// the failure in StartError, exactly as before.
+func resolveBinary(path, exeDir string) string {
+	if path == "" || strings.ContainsRune(path, filepath.Separator) || exeDir == "" {
+		return path
+	}
+	if _, err := exec.LookPath(path); err == nil {
+		return path
+	}
+	candidates := []string{filepath.Join(exeDir, path)}
+	if runtime.GOOS == "windows" {
+		candidates = append(candidates, filepath.Join(exeDir, path+".exe"))
+	}
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			return c
+		}
+	}
+	return path
 }
 
 // inheritEngineOutput wires the engine's stdout/stderr to the companion's own

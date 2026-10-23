@@ -1,9 +1,8 @@
 package portal_test
 
 import (
-	"os"
+	"errors"
 	"testing"
-	"time"
 
 	"github.com/crispy-streaming/crispy-companion/internal/portal"
 	"github.com/godbus/dbus/v5"
@@ -70,40 +69,32 @@ func TestBackgroundOptionsWithoutCommandline(t *testing.T) {
 	}
 }
 
-func TestBackgroundStateRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	path := portal.BackgroundStatePath(dir)
-	if _, ok := portal.ReadBackgroundState(path); ok {
-		t.Fatal("absent state must read as not present")
-	}
-	st := portal.BackgroundState{Granted: true, RequestedAt: time.Now().UTC().Truncate(time.Second)}
-	if err := portal.WriteBackgroundState(path, st); err != nil {
-		t.Fatalf("write state: %v", err)
-	}
-	got, ok := portal.ReadBackgroundState(path)
-	if !ok {
-		t.Fatal("state must be readable after writing")
-	}
-	if !got.Granted || !got.Settled() {
-		t.Fatalf("state: %+v", got)
-	}
-}
-
-func TestBackgroundStateUnreadableIsUnsettled(t *testing.T) {
-	dir := t.TempDir()
-	path := portal.BackgroundStatePath(dir)
-	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := portal.ReadBackgroundState(path); ok {
-		t.Fatal("a corrupt state file must read as not present")
-	}
-}
-
 // Dial must fail fast in CI (no session bus), never hang or panic.
 func TestDialFailsWithoutBus(t *testing.T) {
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent-bus-socket-xyz")
 	if _, err := portal.Dial(); err == nil {
 		t.Skip("unexpected session bus present; skipping negative test")
+	}
+}
+
+// Unavailable: the bus answered but no portal is behind the name.
+func TestUnavailable(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"service unknown", dbus.Error{Name: "org.freedesktop.DBus.Error.ServiceUnknown", Body: []any{"The name is not activatable"}}, true},
+		{"no owner", dbus.Error{Name: "org.freedesktop.DBus.Error.NameHasNoOwner"}, true},
+		{"no background interface", dbus.Error{Name: "org.freedesktop.DBus.Error.UnknownMethod"}, true},
+		{"not activatable, plain text", errors.New("The name is not activatable"), true},
+		{"cancelled by the user", dbus.Error{Name: "org.freedesktop.portal.Error.Cancelled"}, false},
+		{"timeout", errors.New("portal: background request timed out"), false},
+	}
+	for _, c := range cases {
+		if got := portal.Unavailable(c.err); got != c.want {
+			t.Errorf("%s: Unavailable = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

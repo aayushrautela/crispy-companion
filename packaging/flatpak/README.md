@@ -48,7 +48,7 @@ commandline ends in `--autostart-run`, so the login start serves
 without asking the portal again.
 
 The portal shows a dialog per request, so the answer is recorded in
-`background-portal.json` in the data dir and never asked again:
+`autostart.json` in the data dir and never asked again:
 
 | Answer | Effect |
 |---|---|
