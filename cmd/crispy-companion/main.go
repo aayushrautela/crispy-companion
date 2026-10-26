@@ -295,10 +295,12 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 
 	// Pika Backup-style background handling (best-effort): declare that
 	// this process is intentionally running in the background, then
-	// arrange login autostart once. Both happen after the listeners are
-	// up so a second instance ("already running" above) never triggers a
-	// portal dialog, and no listener waits for the user to answer the
-	// dialog.
+	// arrange login autostart — skipped once granted, re-asked on
+	// regular launches after a refusal (desktops answer refusals from
+	// their permission store, so a re-enabled app heals its own state).
+	// Both happen after the listeners are up so a second instance
+	// ("already running" above) never triggers a portal dialog, and no
+	// listener waits for the user to answer the dialog.
 	//
 	// autostartRun means the OS started us from its own autostart entry:
 	// autostart is on by definition, so arranging it again would only
@@ -307,7 +309,7 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 		_ = pc.SetStatus("Torrent streaming ready")
 	}
 	if !autostartRun {
-		ensureAutostart(pc, requestAutostart, dataDir, logger)
+		ensureAutostart(pc, notifier, requestAutostart, dataDir, logger)
 	}
 
 	sig := make(chan os.Signal, 1)
@@ -336,33 +338,55 @@ var autostartCommand = []string{"crispy-companion", "--autostart-run"}
 // autostartReason is shown to the user in the desktop's dialog.
 const autostartReason = "Keep torrent streaming available in the background"
 
-// ensureAutostart arranges login autostart the way the platform expects,
-// once: the desktop portal on Linux (a real dialog, recorded either way),
-// the platform's own registration elsewhere — a LaunchAgent on macOS, the
-// HKCU Run value on Windows, the XDG entry on a Linux host without a
-// portal (no bus, or a bus with no portal behind the name).
+// ensureAutostart arranges login autostart the way the platform expects:
+// the desktop portal on Linux (the desktop's own permission state
+// decides, and the outcome is recorded either way), the platform's own
+// registration elsewhere — a LaunchAgent on macOS, the HKCU Run value on
+// Windows, the XDG entry on a Linux host without a portal (no bus, or a
+// bus with no portal behind the name).
 //
-// The answer is recorded in the data dir and never asked again: enabled
-// and refused both settle the question. A failed attempt settles nothing —
-// the next start retries. force (--request-autostart) always tries again,
-// which is the way back after the user revoked autostart in the OS or
-// desktop settings.
+// A granted answer settles the question. A refusal does not: every
+// regular launch — never an --autostart-run start made by the desktop
+// itself — asks again, which heals the state when the user re-enables
+// the app in desktop settings and is otherwise silent, since desktops
+// answer refusals straight from their permission store. A failed
+// attempt settles nothing — the next start retries. force
+// (--request-autostart) always tries again, which is the way back after
+// the user revoked autostart in the OS or desktop settings.
+//
+// Inside a Flatpak the portal is the only path: the sandbox sees its
+// own private home, so a direct registration would write an entry the
+// desktop never runs. There the portal's absence is reported to the
+// user rather than recorded as a success.
 //
 // dbus-activatable stays false: the companion has no D-Bus activation
 // service, and activating through D-Bus would start the app through the
 // desktop file rather than the pinned command.
-func ensureAutostart(pc *portal.Conn, force bool, dataDir string, logger *log.Logger) {
+func ensureAutostart(pc *portal.Conn, notifier notify.Notifier, force bool, dataDir string, logger *log.Logger) {
 	statePath := autostart.StatePath(dataDir)
 	if !force {
-		if st, ok := autostart.ReadState(statePath); ok && st.Settled() {
+		if st, ok := autostart.ReadState(statePath); ok && st.Enabled {
+			// Granted — the desktop already runs us at login; asking
+			// again per launch would only churn. --request-autostart
+			// forces a fresh round.
 			return
 		}
+		// A refusal never settles: the ask below repeats on regular
+		// launches and heals the record when the user re-enables us.
 	}
 	now := time.Now().UTC()
 	record := func(st autostart.State) {
 		if err := autostart.WriteState(statePath, st); err != nil {
 			logger.Printf("could not record the autostart answer: %v", err)
 		}
+	}
+	// Outcomes that need a fix outside this daemon (a refusal in
+	// desktop settings, a missing portal package) must reach the user:
+	// Pika Backup dialogs them, but this daemon has no window and log
+	// lines are journal entries nobody opens. So post a notification
+	// on top of logging.
+	tell := func(title, body string) {
+		_ = notifier.Post(notify.Notification{Title: title, Body: body})
 	}
 
 	if pc != nil {
@@ -373,8 +397,10 @@ func ensureAutostart(pc *portal.Conn, force bool, dataDir string, logger *log.Lo
 			record(autostart.State{Enabled: true, Method: autostart.MethodPortal, RequestedAt: now})
 			return
 		case err == nil:
-			logger.Printf("background/autostart refused (background=%v autostart=%v); force another request with --request-autostart", bg, auto)
+			logger.Printf("background/autostart refused (background=%v autostart=%v); asking again on the next regular launch, --request-autostart forces it", bg, auto)
 			record(autostart.State{Refused: true, RequestedAt: now})
+			tell("Login autostart is off",
+				"Enable Crispy Companion under your desktop's background-app settings to start it at login.")
 			return
 		case !portal.Unavailable(err):
 			// A real answer failed, was cancelled or timed out. No state:
@@ -385,8 +411,23 @@ func ensureAutostart(pc *portal.Conn, force bool, dataDir string, logger *log.Lo
 			return
 		}
 		// The bus is there but no portal owns the name: nobody can ask
-		// the user, so fall through to the plain entry below.
-		logger.Printf("desktop portal unavailable (%v): registering the autostart entry directly", err)
+		// the user. Fall through to the direct registration below —
+		// right on the host, never recorded inside a Flatpak.
+		logger.Printf("desktop portal unavailable (%v)", err)
+	}
+
+	// No portal answered (no bus, or no portal behind the name). On the
+	// host that keeps working: macOS and Windows always land here, and
+	// Linux sessions register the XDG entry directly. Inside a Flatpak
+	// there is nothing this process can do — the desktop reads
+	// autostart entries from the host home and the sandbox sees its
+	// own — so surface the misconfiguration instead of recording a
+	// "success" that never runs.
+	if autostart.InFlatpak() {
+		logger.Printf("no desktop portal inside the Flatpak: leaving login autostart unset (retried on the next start)")
+		tell("Login autostart could not be arranged",
+			"No desktop background portal answered this session (xdg-desktop-portal). The companion retries each start.")
+		return
 	}
 
 	// No portal at all: macOS and Windows always land here, Linux on

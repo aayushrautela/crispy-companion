@@ -78,6 +78,27 @@ func TestStateRoundTrip(t *testing.T) {
 	}
 }
 
+// InFlatpak checks the /.flatpak-info marker first and FLATPAK_ID as the
+// documented env fallback. These tests only assert the env paths: the
+// marker either exists on this host (in which case the env half is
+// moot) or it does not.
+func TestInFlatpak(t *testing.T) {
+	if _, err := os.Stat(autostart.FlatpakInfoPath); err == nil {
+		if !autostart.InFlatpak() {
+			t.Fatalf("%s present but InFlatpak is false", autostart.FlatpakInfoPath)
+		}
+		return
+	}
+	t.Setenv("FLATPAK_ID", "io.crispy.Companion")
+	if !autostart.InFlatpak() {
+		t.Fatal("FLATPAK_ID set but InFlatpak is false")
+	}
+	t.Setenv("FLATPAK_ID", "")
+	if autostart.InFlatpak() {
+		t.Fatal("no marker and empty FLATPAK_ID but InFlatpak is true")
+	}
+}
+
 func TestStateUnreadableIsUnsettled(t *testing.T) {
 	dir := t.TempDir()
 	path := autostart.StatePath(dir)

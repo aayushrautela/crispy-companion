@@ -3,8 +3,11 @@
 // Two mechanisms exist, picked by what the platform offers:
 //
 //   - Linux desktops have the XDG Desktop Background portal: the daemon
-//     asks the user once (a real dialog, revocable in Settings) and the
-//     desktop writes the autostart entry — the way Pika Backup does it.
+//     asks and the desktop decides (revocable in its app settings) and
+//     writes the autostart entry on the host — the way Pika Backup does
+//     it. Inside a Flatpak sandbox that portal is the only mechanism
+//     that works: the sandbox sees its own private home, so a direct
+//     write lands where the desktop never reads (see InFlatpak).
 //     The portal request itself lives in internal/portal; this package
 //     only records the outcome (the State below).
 //   - Windows and macOS have no portal. There the daemon writes the
@@ -16,11 +19,13 @@
 // Every entry it writes launches the companion with --autostart-run, so
 // the login start serves without registering itself again.
 //
-// The portal shows a dialog per request, so the outcome is recorded in
-// the data dir and settled once: enabled or refused, never asked again
-// automatically. A failed registration settles nothing and the next
-// start retries. --request-autostart forces a new round, which is the
-// way back after the user revoked the app in desktop Settings.
+// The outcome is recorded in the data dir. A grant settles the question
+// — the entry exists until the user revokes it. A refusal is not final:
+// regular launches re-ask, and desktops answer from their permission
+// store without another dialog (GNOME). A failed attempt settles
+// nothing and the next start retries. --request-autostart forces a new
+// round, which is the way back after the user revoked the app in
+// desktop Settings.
 package autostart
 
 import (
@@ -42,6 +47,23 @@ const (
 	MethodLaunchAgent = "launchagent" // macOS: ~/Library/LaunchAgents plist
 	MethodRegistry    = "registry"    // Windows: HKCU …\Run value
 )
+
+// FlatpakInfoPath is the marker file flatpak writes into the sandbox
+// root; its presence is the authoritative sandbox check.
+const FlatpakInfoPath = "/.flatpak-info"
+
+// InFlatpak reports whether this process runs inside a Flatpak sandbox.
+// Inside one, only the desktop Background portal can arrange login
+// autostart: the desktop reads entries from the HOST home, the sandbox
+// sees its own private one, and anything a direct registration writes
+// here is invisible to it. Callers must therefore answer through the
+// portal and report its absence instead of recording a success.
+func InFlatpak() bool {
+	if _, err := os.Stat(FlatpakInfoPath); err == nil {
+		return true
+	}
+	return os.Getenv("FLATPAK_ID") != ""
+}
 
 // State records the outcome of the last autostart attempt.
 type State struct {
