@@ -4,8 +4,9 @@
 # Generates internal/config/builddefaults_gen.go (gitignored) from:
 #   1. the environment (CI maps repository secrets onto these names), else
 #   2. a .env file in the repository root (see .env.example)
-# With neither, the build keeps fail-closed defaults: pairing stays disabled
-# until a crispy-server URL is configured at runtime.
+# With neither, the build keeps fail-closed defaults: pairing stays
+# disabled until a crispy-server URL is configured at runtime, and menu
+# clicks answer with a notification only (no browser open).
 #
 # Values are never printed; only which source supplied them is reported.
 #
@@ -70,8 +71,10 @@ report() {
 
 server_url="${CRISPY_SERVER_URL:-}"
 origins="${CRISPY_ALLOWED_ORIGINS:-}"
+webapp_url="${CRISPY_WEBAPP_URL:-}"
 server_src="environment"
 origins_src="environment"
+webapp_src="environment"
 if [ -z "$server_url" ]; then
 	server_url="$(env_value CRISPY_SERVER_URL)"
 	server_src="$(basename "$env_file")"
@@ -80,10 +83,15 @@ if [ -z "$origins" ]; then
 	origins="$(env_value CRISPY_ALLOWED_ORIGINS)"
 	origins_src="$(basename "$env_file")"
 fi
+if [ -z "$webapp_url" ]; then
+	webapp_url="$(env_value CRISPY_WEBAPP_URL)"
+	webapp_src="$(basename "$env_file")"
+fi
 report "$server_url" CRISPY_SERVER_URL "$server_src"
 report "$origins" CRISPY_ALLOWED_ORIGINS "$origins_src"
+report "$webapp_url" CRISPY_WEBAPP_URL "$webapp_src"
 
-if [ -z "$server_url" ] && [ -z "$origins" ]; then
+if [ -z "$server_url" ] && [ -z "$origins" ] && [ -z "$webapp_url" ]; then
 	if [ -e "$target" ]; then
 		echo "builddefaults: nothing new to inject; keeping the existing ${target#"$root/"}"
 	else
@@ -92,7 +100,7 @@ if [ -z "$server_url" ] && [ -z "$origins" ]; then
 	exit 0
 fi
 
-case "$server_url$origins" in
+case "$server_url$origins$webapp_url" in
 *$'\n'*)
 	echo "builddefaults: values must not contain newlines" >&2
 	exit 1
@@ -108,6 +116,7 @@ chmod 0600 "$tmp"
 	echo "func init() {"
 	printf '\tbuildServerURL = "%s"\n' "$(go_escape "$server_url")"
 	printf '\tbuildAllowedOrigins = "%s"\n' "$(go_escape "$origins")"
+	printf '\tbuildWebAppURL = "%s"\n' "$(go_escape "$webapp_url")"
 	echo "}"
 } >"$tmp"
 mv "$tmp" "$target"

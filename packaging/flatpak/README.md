@@ -10,7 +10,7 @@ as well).
 | Permission | Why |
 |---|---|
 | `--share=network` | Bind `:11470` loopback + reach trackers/peers + crispy-server TLS. Required. Ports >1024 need nothing else. |
-| `--talk-name=org.freedesktop.portal.Desktop` | Pairing/result notifications with Revoke action (Notification portal). |
+| `--talk-name=org.freedesktop.portal.Desktop` | Pairing/result notifications with Revoke action; OpenURI — the start-menu entry opens the web app in the default browser through the runtime's xdg-open. |
 | `--talk-name=org.freedesktop.portal.Background` | Login autostart, requested once on first start; user revocable in Settings. |
 | `--filesystem=xdg-data/crispy-companion` | The ONLY host filesystem access: tokens, config, engine cache. No `home:`, no `host:`. |
 
@@ -90,12 +90,20 @@ needs none. `shared: raw` LAN mode is the only case that needs a manual
 
 The desktop entry is exported to the host's application menu by Flatpak.
 It launches the daemon in menu mode (`--menu-launch`); because the daemon
-is headless, it answers every launch with a desktop notification:
+is headless, it answers every launch by opening the Crispy web app in
+the default browser (inside the sandbox that is the runtime's xdg-open,
+which forwards to the OpenURI portal) plus a desktop notification:
 
-| Situation | Notification |
-|---|---|
-| Fresh start | "Crispy Companion started" |
-| Clicked again while running | "Crispy Companion is already running" (no second engine is spawned) |
+| Situation | Browser | Notification |
+|---|---|---|
+| Fresh start | web app opens | "Crispy Companion started" |
+| Clicked again while running | web app opens | "Crispy Companion is already running" (no second engine is spawned) |
+| No URL configured / opener fails | — | notification only; on an opener failure the notification carries the URL |
+
+The opened URL is the `CRISPY_WEBAPP_URL` build default (table above),
+overridable at runtime via `webapp.url` in config.toml or the
+`CRISPY_COMPANION_WEBAPP_URL` environment variable. Login autostart
+(`--autostart-run`) never opens a browser — a boot start only serves.
 
 The entry is `packaging/flatpak/io.crispy.Companion.desktop`; it must keep
 `NoDisplay` off or the app stays hidden from the menu, and `Icon=` must
@@ -158,6 +166,7 @@ as part of the source tree:
 |---|---|
 | `CRISPY_SERVER_URL` | Where the companion phones home to pair (`https://api.crispytv.tech`) |
 | `CRISPY_ALLOWED_ORIGINS` | Web origins allowed to reach the loopback API (`https://web.crispytv.tech`) |
+| `CRISPY_WEBAPP_URL` | Web app URL the start-menu entry opens in the default browser (`https://web.crispytv.tech`) |
 
 Locally:
 
@@ -171,6 +180,7 @@ and variables → Actions), or:
 ```sh
 gh secret set CRISPY_SERVER_URL --body 'https://api.crispytv.tech'
 gh secret set CRISPY_ALLOWED_ORIGINS --body 'https://web.crispytv.tech'
+gh secret set CRISPY_WEBAPP_URL --body 'https://web.crispytv.tech'
 ```
 
 Notes:

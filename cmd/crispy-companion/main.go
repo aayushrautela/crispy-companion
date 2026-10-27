@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/crispy-streaming/crispy-companion/internal/autostart"
+	"github.com/crispy-streaming/crispy-companion/internal/browser"
 	"github.com/crispy-streaming/crispy-companion/internal/config"
 	"github.com/crispy-streaming/crispy-companion/internal/engine"
 	"github.com/crispy-streaming/crispy-companion/internal/grant"
@@ -167,6 +168,9 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 			Title: "Crispy Companion is already running",
 			Body:  "The local engine is up. Open the Crispy web app to pair or stream.",
 		})
+		if menuLaunch {
+			openWebApp(cfg.WebAppURL, notifier, logger)
+		}
 		return nil
 	}
 
@@ -244,6 +248,9 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 				Title: "Crispy Companion is already running",
 				Body:  "The local engine is up. Open the Crispy web app to pair or stream.",
 			})
+			if menuLaunch {
+				openWebApp(cfg.WebAppURL, notifier, logger)
+			}
 			return nil
 		}
 		return err
@@ -273,9 +280,11 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 	}()
 
 	// A headless daemon has no window, so the start-menu entry has to
-	// answer the click with something visible. Unconditional: the click
-	// must never look like a no-op, and the flag may not survive the
-	// desktop's Exec rewriting.
+	// answer the click with something visible: the notification below,
+	// and — when a web app URL is configured — the Crispy web app in
+	// the default browser. Unconditional: the click must never look
+	// like a no-op, and the flag may not survive the desktop's Exec
+	// rewriting.
 	if menuLaunch {
 		logger.Printf("launched from the start-menu entry")
 	}
@@ -283,6 +292,9 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 		Title: "Crispy Companion started",
 		Body:  "Listening on 127.0.0.1:" + strconv.Itoa(port) + ". Open the Crispy web app to pair this device.",
 	})
+	if menuLaunch {
+		openWebApp(cfg.WebAppURL, notifier, logger)
+	}
 
 	// M5 shared listeners. Loopback always serves; these add a second
 	// surface. The engine stays loopback-only in every mode.
@@ -323,6 +335,33 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 		_ = s.Shutdown(ctx)
 	}
 	return nil
+}
+
+// openWebApp answers a start-menu click with the Crispy web app in the
+// default browser — the headless daemon's only window. Only
+// --menu-launch calls it: login autostart (--autostart-run) and plain
+// CLI launches keep serving silently exactly as before. Best-effort by
+// design: an unset or invalid URL only logs, and a failed opener
+// degrades to a notification carrying the URL, so the click always
+// answers with something visible.
+func openWebApp(rawURL string, notifier notify.Notifier, logger *log.Logger) {
+	if rawURL == "" {
+		logger.Printf("no web app URL configured: the menu entry answers with the notification only (set webapp.url or CRISPY_COMPANION_WEBAPP_URL)")
+		return
+	}
+	err := browser.Open(rawURL)
+	switch {
+	case errors.Is(err, browser.ErrInvalidURL):
+		logger.Printf("web app URL %q is not an absolute http(s) URL; not opening a browser", rawURL)
+	case err != nil:
+		logger.Printf("could not open %s in the default browser: %v", rawURL, err)
+		_ = notifier.Post(notify.Notification{
+			Title: "Crispy Companion is running",
+			Body:  "Open " + rawURL + " in a browser to pair or stream.",
+		})
+	default:
+		logger.Printf("opened the Crispy web app (%s) in the default browser", rawURL)
+	}
 }
 
 // autostartCommand is what the desktop writes into the login-autostart

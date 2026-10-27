@@ -55,6 +55,7 @@ jobs:
         env:
           CRISPY_SERVER_URL: ${{ secrets.CRISPY_SERVER_URL }}
           CRISPY_ALLOWED_ORIGINS: ${{ secrets.CRISPY_ALLOWED_ORIGINS }}
+          CRISPY_WEBAPP_URL: ${{ secrets.CRISPY_WEBAPP_URL }}
         run: bash scripts/builddefaults.sh
       - name: Build the universal companion
         run: |

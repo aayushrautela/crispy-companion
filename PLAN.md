@@ -312,6 +312,9 @@ sustainableMarginPercent = 100  # advisory only: speed*100 â‰¥ bitrate*margin â‡
 url = ""                                   # default: unset (pairing fails closed); build time injection via scripts/builddefaults.sh (CI repository secrets, or .env per .env.example), runtime override via crispyServer.url / CRISPY_COMPANION_SERVER_URL
 clientId = "crispy-companion"          # must be allowlisted server-side (RFC 8628)
 
+[webapp]
+url = ""                      # opened in the default browser on a --menu-launch click; empty = notification only. Build-time injection via scripts/builddefaults.sh (CRISPY_WEBAPP_URL), runtime override via webapp.url / CRISPY_COMPANION_WEBAPP_URL. Login autostart never opens a browser.
+
 [shared]
 mode = "off"                  # off | raw
 listenAddr = ""               # raw only: explicit LAN IP, never 0.0.0.0 by default

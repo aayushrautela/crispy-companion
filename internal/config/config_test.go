@@ -104,6 +104,31 @@ func TestServerURLKeepsLoopbackHTTP(t *testing.T) {
 	}
 }
 
+// The menu entry opens the web app URL in a browser; the key must flow
+// from config.toml and yield to the environment override.
+func TestWebAppURLFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(p, []byte("[webapp]\nurl = \"https://web.example.test\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(dir, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WebAppURL != "https://web.example.test" {
+		t.Fatalf("webapp url from file = %q", cfg.WebAppURL)
+	}
+	t.Setenv("CRISPY_COMPANION_WEBAPP_URL", "https://env.example.test")
+	cfg, err = config.Load(dir, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WebAppURL != "https://env.example.test" {
+		t.Fatalf("webapp url env override = %q", cfg.WebAppURL)
+	}
+}
+
 // The pinned engine binary has to be the default. An empty binaryPath makes
 // the supervisor skip spawning torrserver altogether, so the shipped Flatpak
 // pairs fine and then cannot play a single torrent.

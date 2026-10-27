@@ -41,6 +41,11 @@ type Config struct {
 
 	CrispyServerURL string
 
+	// WebAppURL is the Crispy web app a start-menu click opens in the
+	// default browser. Login autostart and plain CLI launches never
+	// open it — only --menu-launch does.
+	WebAppURL string
+
 	SharedMode       string
 	SharedListenAddr string
 
@@ -58,6 +63,11 @@ var buildServerURL = ""
 // buildAllowedOrigins is a comma-separated origin list, e.g.
 // "https://web.crispytv.tech".
 var buildAllowedOrigins = ""
+
+// buildWebAppURL is the Crispy web app URL a start-menu click opens in
+// the default browser, injected at build time like the two above. An
+// empty value keeps menu clicks answering with a notification only.
+var buildWebAppURL = ""
 
 // Default returns the M1 default configuration (loopback-only).
 func Default() Config {
@@ -89,6 +99,7 @@ func Default() Config {
 		MaxAttemptsPerMinute:      5,
 
 		CrispyServerURL: normalizeServerURL(buildServerURL),
+		WebAppURL:       strings.TrimSpace(buildWebAppURL),
 		SharedMode:      "off",
 
 		LogLevel: "info",
@@ -209,6 +220,9 @@ func applyEnv(c *Config) {
 		// Tolerate a trailing slash: the grant client appends "/v1/…".
 		c.CrispyServerURL = normalizeServerURL(v)
 	}
+	if v := os.Getenv("CRISPY_COMPANION_WEBAPP_URL"); v != "" {
+		c.WebAppURL = strings.TrimSpace(v)
+	}
 	if v := os.Getenv("CRISPY_COMPANION_SHARED_MODE"); v != "" {
 		c.SharedMode = v
 	}
@@ -311,6 +325,8 @@ func set(section, key, val string, cfg *Config) {
 		}
 	case "crispyServer.url":
 		cfg.CrispyServerURL = normalizeServerURL(val)
+	case "webapp.url":
+		cfg.WebAppURL = val
 	case "shared.mode":
 		cfg.SharedMode = val
 	case "shared.listenAddr":
