@@ -52,7 +52,7 @@ func run() error {
 	fs := flag.NewFlagSet("crispy-companion", flag.ContinueOnError)
 	requestAutostart := fs.Bool("request-autostart", false, "force a login-autostart request (normally arranged once on first start), then run")
 	autostartRun := fs.Bool("autostart-run", false, "started by the login-autostart entry: serve, but do not arrange autostart again")
-	menuLaunch := fs.Bool("menu-launch", false, "started from the desktop start-menu entry: report the outcome as a notification")
+	menuLaunch := fs.Bool("menu-launch", false, "started from the desktop start-menu entry: open the Crispy web app in the default browser")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -161,16 +161,20 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 
 	// A second instance (start-menu click, manual run) must never die
 	// silently: if the companion is already up, say so and exit. Without
-	// this the user clicks the icon and nothing at all happens.
+	// this the user clicks the icon and nothing at all happens. A
+	// start-menu click already answers with the web app in the browser,
+	// so it needs no notification on top; a manual run has no other
+	// visible answer and keeps the notification.
 	if probeCompanion(cfg.Addr()) {
 		logger.Printf("companion already running on %s", cfg.Addr())
+		if menuLaunch {
+			openWebApp(cfg.WebAppURL, notifier, logger)
+			return nil
+		}
 		_ = notifier.Post(notify.Notification{
 			Title: "Crispy Companion is already running",
 			Body:  "The local engine is up. Open the Crispy web app to pair or stream.",
 		})
-		if menuLaunch {
-			openWebApp(cfg.WebAppURL, notifier, logger)
-		}
 		return nil
 	}
 
@@ -242,15 +246,19 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 	if err != nil {
 		if errors.Is(err, syscall.EADDRINUSE) {
 			// Authoritative "already running": this instance lost the race
-			// for the port. Report it instead of dying silently.
+			// for the port. Report it instead of dying silently. A
+			// start-menu click answers with the web app in the browser
+			// instead of a notification; a manual run keeps the
+			// notification, its only visible answer.
 			logger.Printf("port %s already in use: companion already running", cfg.Addr())
+			if menuLaunch {
+				openWebApp(cfg.WebAppURL, notifier, logger)
+				return nil
+			}
 			_ = notifier.Post(notify.Notification{
 				Title: "Crispy Companion is already running",
 				Body:  "The local engine is up. Open the Crispy web app to pair or stream.",
 			})
-			if menuLaunch {
-				openWebApp(cfg.WebAppURL, notifier, logger)
-			}
 			return nil
 		}
 		return err
@@ -280,19 +288,14 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 	}()
 
 	// A headless daemon has no window, so the start-menu entry has to
-	// answer the click with something visible: the notification below,
-	// and — when a web app URL is configured — the Crispy web app in
-	// the default browser. Unconditional: the click must never look
-	// like a no-op, and the flag may not survive the desktop's Exec
-	// rewriting.
+	// answer the click with something visible: the Crispy web app in
+	// the default browser. Unconditional for the click: it must never
+	// look like a no-op, and the flag may not survive the desktop's
+	// Exec rewriting. The daemon itself starts silently — no startup
+	// notification, since a menu launch opens the web app right away
+	// and a login start has no user in front of it.
 	if menuLaunch {
 		logger.Printf("launched from the start-menu entry")
-	}
-	_ = notifier.Post(notify.Notification{
-		Title: "Crispy Companion started",
-		Body:  "Listening on 127.0.0.1:" + strconv.Itoa(port) + ". Open the Crispy web app to pair this device.",
-	})
-	if menuLaunch {
 		openWebApp(cfg.WebAppURL, notifier, logger)
 	}
 
@@ -342,11 +345,11 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 // --menu-launch calls it: login autostart (--autostart-run) and plain
 // CLI launches keep serving silently exactly as before. Best-effort by
 // design: an unset or invalid URL only logs, and a failed opener
-// degrades to a notification carrying the URL, so the click always
-// answers with something visible.
+// degrades to a notification carrying the URL, so a broken setup still
+// tells the user where to go.
 func openWebApp(rawURL string, notifier notify.Notifier, logger *log.Logger) {
 	if rawURL == "" {
-		logger.Printf("no web app URL configured: the menu entry answers with the notification only (set webapp.url or CRISPY_COMPANION_WEBAPP_URL)")
+		logger.Printf("no web app URL configured: the menu entry has nothing to open (set webapp.url or CRISPY_COMPANION_WEBAPP_URL)")
 		return
 	}
 	err := browser.Open(rawURL)

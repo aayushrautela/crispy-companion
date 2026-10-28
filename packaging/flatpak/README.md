@@ -1,9 +1,10 @@
 # Flatpak packaging (M4)
 
 Primary distribution for Linux. Headless daemon with a start-menu entry:
-the `.desktop` file is exported to the application menu and reports the
-daemon's state through desktop notifications (autostart + `pair show` CLI
-as well).
+the `.desktop` file is exported to the application menu and opens the
+Crispy web app in the default browser. The daemon reports its state
+through desktop notifications only when there is something to report
+(autostart outcome, pairing confirmation, `pair show` CLI as well).
 
 ## Permissions rationale
 
@@ -92,13 +93,15 @@ The desktop entry is exported to the host's application menu by Flatpak.
 It launches the daemon in menu mode (`--menu-launch`); because the daemon
 is headless, it answers every launch by opening the Crispy web app in
 the default browser (inside the sandbox that is the runtime's xdg-open,
-which forwards to the OpenURI portal) plus a desktop notification:
+which forwards to the OpenURI portal). The daemon itself starts
+silently — no startup notification, since the browser is already the
+visible answer:
 
 | Situation | Browser | Notification |
 |---|---|---|
-| Fresh start | web app opens | "Crispy Companion started" |
-| Clicked again while running | web app opens | "Crispy Companion is already running" (no second engine is spawned) |
-| No URL configured / opener fails | — | notification only; on an opener failure the notification carries the URL |
+| Fresh start | web app opens | none — the daemon starts silently |
+| Clicked again while running | web app opens | none (no second engine is spawned) |
+| No URL configured / opener fails | — | notification only on an opener failure, carrying the URL |
 
 The opened URL is the `CRISPY_WEBAPP_URL` build default (table above),
 overridable at runtime via `webapp.url` in config.toml or the
