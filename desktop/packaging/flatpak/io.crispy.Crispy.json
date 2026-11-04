@@ -1,0 +1,123 @@
+{
+    "app-id": "io.crispy.Crispy",
+    "runtime": "org.freedesktop.Platform",
+    "runtime-version": "25.08",
+    "sdk": "org.freedesktop.Sdk",
+    "sdk-extensions": [
+        "org.freedesktop.Sdk.Extension.golang",
+        "org.freedesktop.Sdk.Extension.nodejs"
+    ],
+    "command": "crispy",
+    "finish-args": [
+        "--share=network",
+        "--socket=wayland",
+        "--socket=fallback-x11",
+        "--share=ipc",
+        "--device=dri",
+        "--talk-name=org.freedesktop.portal.Desktop",
+        "--talk-name=org.freedesktop.portal.Background",
+        "--talk-name=org.freedesktop.portal.Notification",
+        "--filesystem=xdg-config/Crispy:create",
+        "--filesystem=xdg-data/crispy-companion:create"
+    ],
+    "build-options": {
+        "append-path": "/usr/lib/sdk/golang/bin",
+        "env": {
+            "GOPATH": "/run/build/crispy-companion/go",
+            "GOFLAGS": "-mod=vendor",
+            "CGO_ENABLED": "0",
+            "npm_config_cache": "/run/build/crispy-desktop-app/npm-cache"
+        }
+    },
+    "modules": [
+        {
+            "name": "torrserver-x86_64",
+            "only-arches": ["x86_64"],
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -Dm755 TorrServer-linux-amd64 /app/bin/torrserver"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://github.com/YouROK/TorrServer/releases/download/MatriX.146.1/TorrServer-linux-amd64",
+                    "sha256": "8f6a9f56fcb290055e7737b99c873f1971f26c157b080e1d9980caf8ad095226",
+                    "dest-filename": "TorrServer-linux-amd64"
+                }
+            ]
+        },
+        {
+            "name": "torrserver-aarch64",
+            "only-arches": ["aarch64"],
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -Dm755 TorrServer-linux-arm64 /app/bin/torrserver"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://github.com/YouROK/TorrServer/releases/download/MatriX.146.1/TorrServer-linux-arm64",
+                    "sha256": "72a5b48a8e08203805438a0bb8769887940f673127237cf0926bf5aa15a4ab8b",
+                    "dest-filename": "TorrServer-linux-arm64"
+                }
+            ]
+        },
+        {
+            "name": "crispy-companion",
+            "buildsystem": "simple",
+            "build-commands": [
+                "bash scripts/builddefaults.sh",
+                "go build -trimpath -o /app/bin/crispy-companion ./cmd/crispy-companion"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../../.."
+                }
+            ]
+        },
+        {
+            "name": "electron",
+            "buildsystem": "simple",
+            "build-commands": [
+                "mkdir -p /app/lib/crispy-desktop",
+                "bsdtar -xf electron-v*-linux-*.zip -C /app/lib/crispy-desktop --strip-components=1"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://github.com/electron/electron/releases/download/v45.0.0/electron-v45.0.0-linux-x64.zip",
+                    "dest-filename": "electron-v45.0.0-linux-x64.zip",
+                    "only-arches": ["x86_64"]
+                },
+                {
+                    "type": "file",
+                    "url": "https://github.com/electron/electron/releases/download/v45.0.0/electron-v45.0.0-linux-arm64.zip",
+                    "dest-filename": "electron-v45.0.0-linux-arm64.zip",
+                    "only-arches": ["aarch64"]
+                }
+            ]
+        },
+        {
+            "name": "crispy-desktop-app",
+            "buildsystem": "simple",
+            "build-commands": [
+                "cd desktop && npm ci --omit=dev --ignore-scripts",
+                "mkdir -p /app/share/crispy-desktop/app",
+                "cp -r desktop/src desktop/package.json /app/share/crispy-desktop/app/",
+                "cp -r desktop/node_modules /app/share/crispy-desktop/app/node_modules",
+                "install -Dm755 desktop/packaging/flatpak/crispy /app/bin/crispy",
+                "install -Dm644 desktop/packaging/flatpak/io.crispy.Crispy.desktop /app/share/applications/io.crispy.Crispy.desktop",
+                "install -Dm644 desktop/packaging/flatpak/io.crispy.Crispy.metainfo.xml /app/share/metainfo/io.crispy.Crispy.metainfo.xml",
+                "install -Dm644 packaging/flatpak/io.crispy.Companion.svg /app/share/icons/hicolor/scalable/apps/io.crispy.Crispy.svg",
+                "for f in packaging/flatpak/icons/*/io.crispy.Companion.png; do [ -e \"$f\" ] || continue; s=$(basename \"$(dirname \"$f\")\"); install -Dm644 \"$f\" \"/app/share/icons/hicolor/$s/apps/io.crispy.Crispy.png\"; done"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../../.."
+                }
+            ]
+        }
+    ]
+}

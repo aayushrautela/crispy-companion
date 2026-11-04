@@ -5,3 +5,7 @@ bin/
 internal/config/builddefaults_gen.go
 # Local build-time deployment values (see .env.example).
 .env
+
+# Desktop shell (Electron) dependencies and build output.
+desktop/node_modules/
+desktop/dist/

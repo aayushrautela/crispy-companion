@@ -1,0 +1,8 @@
+#!/bin/sh
+# Flatpak launcher for the Crispy desktop app.
+#
+# Electron's setuid chrome-sandbox helper cannot work inside the Flatpak
+# sandbox, so we start with --no-sandbox; the Flatpak sandbox itself
+# provides the isolation. The `crispy` command name is what the .desktop
+# Exec references, and %u there is what delivers magnet: URLs to the app.
+exec /app/lib/crispy-desktop/electron --no-sandbox /app/share/crispy-desktop/app "$@"

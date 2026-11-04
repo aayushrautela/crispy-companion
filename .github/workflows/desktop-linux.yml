@@ -1,0 +1,125 @@
+# Builds the Crispy desktop shell (Electron, desktop/) for Linux on every
+# push/PR and attaches artifacts to tagged releases (v*):
+#
+#   - AppImage via electron-builder (bundles the Go companion from bin/ as
+#     an extraResource — the companion job builds it first)
+#   - Flatpak bundle io.crispy.Crispy via flatpak-builder (Flathub-style),
+#     manifest: desktop/packaging/flatpak/io.crispy.Crispy.json
+#
+# Go is vendored (GOFLAGS=-mod=vendor, CGO_ENABLED=0); the desktop shell's
+# npm deps are locked (desktop/package-lock.json, npm ci --ignore-scripts —
+# the electron binary comes from the pinned zip in the Flatpak manifest or
+# from electron-builder's own download for AppImage).
+name: Desktop (Linux)
+
+on:
+  push:
+    branches: [main, native-build]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # release job needs this to attach artifacts
+
+jobs:
+  companion:
+    name: vet/test + build crispy-companion
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Inject deployment defaults
+        # Writes internal/config/builddefaults_gen.go (gitignored). Values come
+        # from repository secrets; fork/PR builds keep fail-closed OSS defaults.
+        env:
+          CRISPY_SERVER_URL: ${{ secrets.CRISPY_SERVER_URL }}
+          CRISPY_ALLOWED_ORIGINS: ${{ secrets.CRISPY_ALLOWED_ORIGINS }}
+          CRISPY_WEBAPP_URL: ${{ secrets.CRISPY_WEBAPP_URL }}
+        run: bash scripts/builddefaults.sh
+      - run: make build
+      - uses: actions/upload-artifact@v8
+        with:
+          name: crispy-companion-linux-x86_64
+          path: bin/crispy-companion
+
+  appimage:
+    name: AppImage (x86_64)
+    needs: companion
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Inject deployment defaults
+        env:
+          CRISPY_SERVER_URL: ${{ secrets.CRISPY_SERVER_URL }}
+          CRISPY_ALLOWED_ORIGINS: ${{ secrets.CRISPY_ALLOWED_ORIGINS }}
+          CRISPY_WEBAPP_URL: ${{ secrets.CRISPY_WEBAPP_URL }}
+        run: bash scripts/builddefaults.sh
+      # electron-builder bundles ../bin via extraResources, so the companion
+      # binary must exist before packing.
+      - run: make build
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: cd desktop && npm ci --ignore-scripts
+      - run: cd desktop && npx electron-builder --linux AppImage
+      - uses: actions/upload-artifact@v8
+        with:
+          name: crispy-desktop-appimage-x86_64
+          path: desktop/dist/*.AppImage
+
+  flatpak:
+    name: Flatpak (${{ matrix.variant.arch }})
+    needs: companion
+    runs-on: ${{ matrix.variant.runner }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    strategy:
+      matrix:
+        variant:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v7
+      - name: Inject deployment defaults
+        env:
+          CRISPY_SERVER_URL: ${{ secrets.CRISPY_SERVER_URL }}
+          CRISPY_ALLOWED_ORIGINS: ${{ secrets.CRISPY_ALLOWED_ORIGINS }}
+          CRISPY_WEBAPP_URL: ${{ secrets.CRISPY_WEBAPP_URL }}
+        run: bash scripts/builddefaults.sh
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: crispy-desktop-${{ matrix.variant.arch }}.flatpak
+          manifest-path: desktop/packaging/flatpak/io.crispy.Crispy.json
+          arch: ${{ matrix.variant.arch }}
+          verbose: true
+          artifact-name: crispy-desktop-${{ matrix.variant.arch }}.flatpak
+
+  release:
+    name: Attach artifacts to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [appimage, flatpak]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: crispy-desktop-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: crispy-desktop-*

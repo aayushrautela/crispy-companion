@@ -1,0 +1,73 @@
+{
+  "name": "crispy-desktop",
+  "productName": "Crispy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Crispy desktop app: the Crispy webapp in a standalone window with the bundled crispy-companion daemon underneath.",
+  "license": "GPL-3.0-only",
+  "main": "src/main.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:linux": "electron-builder --linux AppImage",
+    "dist:win": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.0"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "io.crispy.Crispy",
+    "productName": "Crispy",
+    "copyright": "Copyright (C) 2026 Crispy Contributors",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../bin",
+        "to": "bin",
+        "filter": [
+          "crispy-companion",
+          "crispy-companion.exe"
+        ]
+      }
+    ],
+    "linux": {
+      "category": "AudioVideo",
+      "target": [
+        "AppImage"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        "dmg"
+      ]
+    }
+  }
+}

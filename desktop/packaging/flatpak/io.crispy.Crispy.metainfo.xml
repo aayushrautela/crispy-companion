@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.crispy.Crispy</id>
+  <name>Crispy</name>
+  <summary>Crispy webapp in a standalone window with local torrent streaming</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <description>
+    <p>
+      Crispy is a torrent streaming webapp. The desktop app opens it in a
+      proper standalone window and runs the crispy-companion daemon on
+      127.0.0.1 underneath, so playback works out of the box without a
+      separate local service. Pairing is approved from the logged-in webapp.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.crispy.Crispy.desktop</launchable>
+  <url type="homepage">https://crispy.app</url>
+  <provides>
+    <binary>crispy</binary>
+    <mediatype>x-scheme-handler/magnet</mediatype>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-11-04"/>
+  </releases>
+</component>

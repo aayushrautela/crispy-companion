@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Crispy
+Comment=Crispy webapp with local torrent streaming
+Exec=crispy %u
+Icon=io.crispy.Crispy
+MimeType=x-scheme-handler/magnet;
+Categories=AudioVideo;Network;
+Terminal=false
+StartupNotify=true
+X-Flatpak-RenamedFrom=crispy.desktop
