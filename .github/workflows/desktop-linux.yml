@@ -43,7 +43,7 @@ jobs:
           CRISPY_WEBAPP_URL: ${{ secrets.CRISPY_WEBAPP_URL }}
         run: bash scripts/builddefaults.sh
       - run: make build
-      - uses: actions/upload-artifact@v8
+      - uses: actions/upload-artifact@v7
         with:
           name: crispy-companion-linux-x86_64
           path: bin/crispy-companion
@@ -67,14 +67,14 @@ jobs:
       # electron-builder bundles ../bin via extraResources, so the companion
       # binary must exist before packing.
       - run: make build
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - run: cd desktop && npm ci --ignore-scripts
       - run: cd desktop && npx electron-builder --linux AppImage
-      - uses: actions/upload-artifact@v8
+      - uses: actions/upload-artifact@v7
         with:
           name: crispy-desktop-appimage-x86_64
           path: desktop/dist/*.AppImage
