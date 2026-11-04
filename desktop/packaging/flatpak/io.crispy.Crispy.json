@@ -20,6 +20,12 @@
         "--filesystem=xdg-data/crispy-companion:create"
     ],
     "build-options": {
+        "build-args": [
+            "--share=network",
+            "--filesystem=/etc/resolv.conf",
+            "--filesystem=/etc/hosts",
+            "--filesystem=/etc/nsswitch.conf"
+        ],
         "append-path": "/usr/lib/sdk/golang/bin:/app/bin",
         "env": {
             "GOPATH": "/run/build/crispy-companion/go",
