@@ -103,7 +103,7 @@
             "name": "nodejs",
             "buildsystem": "simple",
             "build-commands": [
-                "tar -xJf node-v24.22.2-linux-*.tar.xz -C /app --strip-components=1"
+                "tar -xJf node-v24.22.2-linux-*.tar.xz -C /app --strip-components=1 --no-same-owner"
             ],
             "sources": [
                 {
