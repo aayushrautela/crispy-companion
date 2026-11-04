@@ -4,8 +4,7 @@
     "runtime-version": "25.08",
     "sdk": "org.freedesktop.Sdk",
     "sdk-extensions": [
-        "org.freedesktop.Sdk.Extension.golang",
-        "org.freedesktop.Sdk.Extension.nodejs"
+        "org.freedesktop.Sdk.Extension.golang"
     ],
     "command": "crispy",
     "finish-args": [
@@ -21,7 +20,7 @@
         "--filesystem=xdg-data/crispy-companion:create"
     ],
     "build-options": {
-        "append-path": "/usr/lib/sdk/golang/bin",
+        "append-path": "/usr/lib/sdk/golang/bin:/app/bin",
         "env": {
             "GOPATH": "/run/build/crispy-companion/go",
             "GOFLAGS": "-mod=vendor",
@@ -94,6 +93,29 @@
                     "type": "file",
                     "url": "https://github.com/electron/electron/releases/download/v45.0.0/electron-v45.0.0-linux-arm64.zip",
                     "dest-filename": "electron-v45.0.0-linux-arm64.zip",
+                    "only-arches": ["aarch64"]
+                }
+            ]
+        },
+        {
+            "name": "nodejs",
+            "buildsystem": "simple",
+            "build-commands": [
+                "tar -xJf node-v24.22.2-linux-*.tar.xz -C /app --strip-components=1"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "url": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-x64.tar.xz",
+                    "sha256": "48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75",
+                    "dest-filename": "node-v24.22.2-linux-x64.tar.xz",
+                    "only-arches": ["x86_64"]
+                },
+                {
+                    "type": "file",
+                    "url": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-arm64.tar.xz",
+                    "sha256": "eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8",
+                    "dest-filename": "node-v24.22.2-linux-arm64.tar.xz",
                     "only-arches": ["aarch64"]
                 }
             ]
