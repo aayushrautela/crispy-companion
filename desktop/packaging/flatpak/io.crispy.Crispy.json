@@ -86,7 +86,7 @@
             "buildsystem": "simple",
             "build-commands": [
                 "mkdir -p /app/lib/crispy-desktop",
-                "bsdtar -xf electron-v*-linux-*.zip -C /app/lib/crispy-desktop --strip-components=1"
+                "bsdtar -xf electron-v*-linux-*.zip -C /app/lib/crispy-desktop"
             ],
             "sources": [
                 {
