@@ -226,6 +226,7 @@ func runDaemon(requestAutostart, autostartRun, menuLaunch bool) error {
 		// Headless mirror for `pair show` (no secrets inside).
 		PairingStatePath: filepath.Join(dataDir, "pairing-state.json"),
 		SharedAddr:       sharedAddr.Load,
+		AllowShellToken:  cfg.AllowShellToken,
 	}
 	handler := server.New(deps)
 

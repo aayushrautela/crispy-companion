@@ -18,8 +18,18 @@
 //
 // Security posture: the window shows remote content, so it gets zero
 // native capabilities — nodeIntegration off, sandbox on, contextIsolation
-// on, and the preload only exposes { platform, getVersion() }. Navigation
-// away from the webapp origin is redirected to the system browser.
+// on, and the preload only exposes { platform, getVersion(), getCompanionToken() }.
+// Navigation away from the webapp origin is redirected to the system browser.
+//
+// Pairing: when this shell spawns the companion it sets
+// CRISPY_COMPANION_ALLOW_SHELL_TOKEN=1, and the daemon then answers
+// POST /companion/shell-token to non-browser local callers only (the handler
+// rejects any request carrying Origin or Sec-Fetch-Site, so no web page can
+// ever mint a token). The shell fetches that token once and the preload hands
+// it to the webapp, which stores it as its companion token — the bundled app
+// is paired without the RFC 8628 device-grant prompt. Reusing an already
+// running standalone companion yields no token (404), and the webapp falls
+// back to manual pairing, exactly like a plain browser.
 
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
@@ -43,6 +53,7 @@ let webappOrigin = null;
 let companionProc = null;
 let companionRestarts = 0;
 let quitting = false;
+let shellToken = null;
 const pendingMagnets = [];
 
 function log(...args) {
@@ -122,7 +133,7 @@ async function ensureCompanion() {
   const logFd = LOG_PATH ? fs.openSync(LOG_PATH, 'a') : 'ignore';
   try {
     companionProc = spawn(bin, [], {
-      env: process.env,
+      env: { ...process.env, CRISPY_COMPANION_ALLOW_SHELL_TOKEN: '1' },
       stdio: ['ignore', logFd, logFd],
       windowsHide: true,
     });
@@ -152,6 +163,24 @@ async function ensureCompanion() {
     'Crispy companion failed to start',
     `The local companion at ${COMPANION_ORIGIN} did not respond within 15s.\n\nBinary: ${bin}\n\nPlayback will not work until it runs. See the log at ${LOG_PATH}.`
   );
+}
+
+// Fetch the shell token from the daemon. undici sends neither Origin nor
+// Sec-Fetch-Site, so the daemon's non-browser gate accepts this call; a
+// reused standalone companion (flag unset) answers 404 and we return null.
+async function fetchShellToken() {
+  try {
+    const res = await fetch(`${COMPANION_ORIGIN}/companion/shell-token`, {
+      method: 'POST',
+      headers: { 'X-Crispy-Client': `crispy-desktop/${app.getVersion()}` },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return typeof body.token === 'string' && body.token ? body.token : null;
+  } catch {
+    return null;
+  }
 }
 
 // --- magnet: deep links ------------------------------------------------------
@@ -299,6 +328,9 @@ if (!gotLock) {
   });
 
   ipcMain.handle('crispy-desktop:version', () => app.getVersion());
+  // The local companion token minted by the shell-spawned daemon; null when
+  // no shell-spawned daemon is in use (webapp pairs manually then).
+  ipcMain.handle('crispy-desktop:companion-token', () => shellToken);
 
   app.whenReady().then(async () => {
     LOG_PATH = path.join(app.getPath('userData'), 'main.log');
@@ -316,6 +348,12 @@ if (!gotLock) {
     if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
 
     await ensureCompanion();
+    shellToken = await fetchShellToken();
+    log(
+      shellToken
+        ? 'got shell token from companion — webapp will be paired as crispy-desktop'
+        : 'no shell token (standalone companion reused?) — webapp will pair manually'
+    );
     registerMagnetScheme();
     createWindow(webappURL);
     maybeCheckForUpdates();

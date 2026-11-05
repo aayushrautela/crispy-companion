@@ -59,6 +59,9 @@ type Deps struct {
 	Buffer BufferConfig
 	// ProxyAllowInternal relaxes the /v1/proxy target guard. Tests only.
 	ProxyAllowInternal bool
+	// AllowShellToken enables POST /companion/shell-token for non-browser
+	// local callers. Set by the desktop shell when it spawns the daemon.
+	AllowShellToken bool
 	// V1 is the process-wide /v1 state (selection, rate limits, bitrate
 	// samples, proxy client). New initializes it when nil; main shares
 	// one instance across listeners.
@@ -82,6 +85,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("/companion/status", d.handleStatus)
 	mux.HandleFunc("/companion/revoke", d.handleRevoke)
 	mux.HandleFunc("/companion/pair", d.handlePair)
+	mux.HandleFunc("POST /companion/shell-token", d.handleShellToken)
 	// Native /v1 surface (Go 1.22 method patterns; GET also matches HEAD).
 	mux.HandleFunc("POST /v1/torrents", d.handleV1Create)
 	mux.HandleFunc("GET /v1/torrents", d.handleV1List)
@@ -112,6 +116,38 @@ func (d Deps) handlePing(w http.ResponseWriter, r *http.Request) {
 		RequiresLogin: true,
 		Paired:        d.Tokens.Count() > 0,
 	})
+}
+
+type shellTokenResponse struct {
+	Token    string `json:"token"`
+	DeviceID string `json:"deviceId"`
+}
+
+// handleShellToken returns the desktop shell's persistent local token. The
+// route only exists when AllowShellToken is set (the shell spawned this
+// daemon, so local trust is already established), and it rejects anything
+// that looks like a browser: browsers always send Origin and Sec-Fetch-Site
+// on cross-origin calls, so even an allowlisted webapp origin can ping but
+// never mint a token here.
+func (d Deps) handleShellToken(w http.ResponseWriter, r *http.Request) {
+	if !d.AllowShellToken {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if r.Header.Get("Origin") != "" {
+		http.Error(w, "browser requests not allowed", http.StatusForbidden)
+		return
+	}
+	if fs := r.Header.Get("Sec-Fetch-Site"); fs != "" && !strings.EqualFold(fs, "none") {
+		http.Error(w, "browser requests not allowed", http.StatusForbidden)
+		return
+	}
+	tok, err := d.Tokens.ShellToken(pairing.ShellDeviceID)
+	if err != nil {
+		http.Error(w, "token unavailable", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, shellTokenResponse{Token: tok, DeviceID: pairing.ShellDeviceID})
 }
 
 func (d Deps) handleHealthz(w http.ResponseWriter, r *http.Request) {

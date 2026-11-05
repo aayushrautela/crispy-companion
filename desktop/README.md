@@ -43,13 +43,30 @@ needed a shell-side proxy on 2 of 3 platforms. Electron needs zero workarounds.
 
 The window loads a **remote** page, so it gets zero native powers:
 `nodeIntegration: false`, `sandbox: true`, `contextIsolation: true`.
-`src/preload.js` exposes only `window.crispyDesktop = { platform,
-getVersion() }` so the webapp can detect the desktop shell. Navigations and
-`window.open` to other origins are handed to the system browser.
+`src/preload.js` exposes only `window.crispyDesktop = { platform, getVersion(),
+getCompanionToken() }` so the webapp can detect the desktop shell. Navigations
+and `window.open` to other origins are handed to the system browser.
 
-### Webapp integration points (webapp repo, later)
+### Seamless pairing (no device-grant prompt in the bundled app)
+
+When the shell spawns the companion it sets `CRISPY_COMPANION_ALLOW_SHELL_TOKEN=1`.
+The daemon then answers `POST /companion/shell-token` — but only to non-browser
+local callers: the handler rejects any request carrying `Origin` or a
+`Sec-Fetch-Site` other than `none`, so a web page on an allowlisted origin can
+ping but never mint a token. The shell calls it once from the main process
+(undici sends neither header) and exposes the token via
+`window.crispyDesktop.getCompanionToken()`. The webapp stores it as its
+companion token (`applyDesktopShellToken()` in `src/services/companion.ts`),
+so the bundled app is paired instantly and the pairing banner never shows.
+If the shell reuses an already-running standalone companion (flag unset), the
+endpoint 404s, the bridge returns null, and the webapp falls back to the normal
+manual pairing — same as a plain browser.
+
+### Webapp integration points (webapp repo)
 
 - Detect the shell: `if (window.crispyDesktop) …`
+- Adopt the shell-spawned companion token: `await window.crispyDesktop.getCompanionToken()`
+  (handled by `applyDesktopShellToken()` in `src/services/companion.ts`).
 - Receive deep links: `window.addEventListener('crispy:magnet', (e) => e.detail)`
   — `e.detail` is the full `magnet:…` URL. Delivered on launch and on
   second-instance/`open-url`.

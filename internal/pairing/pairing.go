@@ -75,20 +75,43 @@ func (s *Store) saveLocked() error {
 
 // Mint creates a ≥128-bit URL-safe token bound to the given identity.
 func (s *Store) Mint(userID, email, deviceID string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mintLocked(userID, email, deviceID)
+}
+
+func (s *Store) mintLocked(userID, email, deviceID string) (string, error) {
 	var raw [24]byte // 192 bits
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
 	}
 	tok := base64.RawURLEncoding.EncodeToString(raw[:])
 	now := time.Now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.toks[tok] = Token{UserID: userID, Email: email, DeviceID: deviceID, CreatedAt: now, LastSeenAt: now}
 	if err := s.saveLocked(); err != nil {
 		delete(s.toks, tok)
 		return "", err
 	}
 	return tok, nil
+}
+
+// ShellDeviceID is the device label of the desktop shell's local token.
+const ShellDeviceID = "crispy-desktop"
+
+// ShellToken returns the persistent token bound to deviceID, minting one on
+// first use. It backs POST /companion/shell-token: the desktop shell spawned
+// this daemon, so local trust is already established and no server
+// device-grant round trip is needed. The token never leaves the machine over
+// HTTP — the handler rejects requests carrying Origin or Sec-Fetch-Site.
+func (s *Store) ShellToken(deviceID string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, v := range s.toks {
+		if v.DeviceID == deviceID {
+			return k, nil
+		}
+	}
+	return s.mintLocked("", "", deviceID)
 }
 
 // Lookup authenticates a bearer token in constant time over the key set.

@@ -39,6 +39,13 @@ type Config struct {
 	PendingTTLSeconds         int
 	MaxAttemptsPerMinute      int
 
+	// AllowShellToken enables POST /companion/shell-token for non-browser
+	// local callers. Off by default: a standalone companion keeps pairing
+	// server-mediated only. The desktop shell sets it (via env) when it
+	// spawns the daemon, so the bundled app pairs without a device-grant
+	// round trip.
+	AllowShellToken bool
+
 	CrispyServerURL string
 
 	// WebAppURL is the Crispy web app a start-menu click opens in the
@@ -240,6 +247,9 @@ func applyEnv(c *Config) {
 		for i := range c.AllowedOrigins {
 			c.AllowedOrigins[i] = strings.TrimSpace(c.AllowedOrigins[i])
 		}
+	}
+	if v := os.Getenv("CRISPY_COMPANION_ALLOW_SHELL_TOKEN"); v != "" {
+		c.AllowShellToken = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
 	}
 }
 
