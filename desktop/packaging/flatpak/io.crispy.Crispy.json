@@ -13,6 +13,8 @@
         "--socket=fallback-x11",
         "--share=ipc",
         "--device=dri",
+        "--socket=pipewire-0",
+        "--socket=pulseaudio",
         "--talk-name=org.freedesktop.portal.Desktop",
         "--talk-name=org.freedesktop.portal.Background",
         "--talk-name=org.freedesktop.portal.Notification",
