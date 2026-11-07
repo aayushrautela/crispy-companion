@@ -1,7 +1,9 @@
-# Builds the macOS desktop app (dmg + zip, arm64) on a macOS runner and
-# attaches the artifacts to tagged releases (v*). electron-builder can only
-# sign/notarize mac targets on macOS; unsigned artifacts are produced unless
-# the APPLE_* / CSC_* secrets are configured (see desktop/README.md).
+# Builds the macOS desktop app (dmg + zip) for arm64 and x64 on a macOS
+# runner and attaches the artifacts to tagged releases (v*). GitHub's free
+# macOS runner is Apple Silicon, so the Intel (x64) build is cross-built from
+# it; electron-builder can only sign/notarize mac targets on macOS, so
+# unsigned artifacts are produced unless the APPLE_* / CSC_* secrets are
+# configured (see desktop/README.md).
 name: Desktop (macOS)
 
 on:
@@ -16,11 +18,12 @@ permissions:
 
 jobs:
   dmg:
-    name: dmg + zip (arm64)
+    name: dmg + zip (arm64 + x64)
     runs-on: macos-latest # macos-26 arm64
     env:
       TORRSERVER_VERSION: MatriX.146.1
       TORRSERVER_SHA_ARM64: a9995fe6f9a2766d8db1fe3ab2e201108fb787c27563831307d4d2e9d29b6fb7
+      TORRSERVER_SHA_X64: 6010b5bd8b7541b014522b8dbf1d8a3429de3133daed67dc2a5c84736efd4065
       # Unsigned by default; set repo variable MAC_SIGNING=1 (plus APPLE_*
       # secrets) to sign + notarize with a Developer ID.
       CSC_IDENTITY_AUTO_DISCOVERY: ${{ vars.MAC_SIGNING == '1' && 'true' || 'false' }}
@@ -39,15 +42,22 @@ jobs:
           CRISPY_ALLOWED_ORIGINS: ${{ secrets.CRISPY_ALLOWED_ORIGINS }}
           CRISPY_WEBAPP_URL: ${{ secrets.CRISPY_WEBAPP_URL }}
         run: bash scripts/builddefaults.sh
-      - name: Build companion (darwin arm64)
-        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 make build
-      - name: Fetch pinned TorrServer engine (darwin arm64)
+      - name: Build companion (darwin arm64 + x64)
         run: |
           set -euo pipefail
-          mkdir -p bin
-          curl -fsSLo bin/torrserver "https://github.com/YouROK/TorrServer/releases/download/$TORRSERVER_VERSION/TorrServer-darwin-arm64"
-          echo "$TORRSERVER_SHA_ARM64  bin/torrserver" | shasum -a 256 -c -
-          chmod +x bin/torrserver
+          mkdir -p staging/arm64 staging/x64
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 make build
+          mv bin/crispy-companion staging/arm64/crispy-companion
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 make build
+          mv bin/crispy-companion staging/x64/crispy-companion
+      - name: Fetch pinned TorrServer engine (darwin arm64 + x64)
+        run: |
+          set -euo pipefail
+          curl -fsSLo staging/arm64/torrserver "https://github.com/YouROK/TorrServer/releases/download/$TORRSERVER_VERSION/TorrServer-darwin-arm64"
+          echo "$TORRSERVER_SHA_ARM64  staging/arm64/torrserver" | shasum -a 256 -c -
+          curl -fsSLo staging/x64/torrserver "https://github.com/YouROK/TorrServer/releases/download/$TORRSERVER_VERSION/TorrServer-darwin-amd64"
+          echo "$TORRSERVER_SHA_X64  staging/x64/torrserver" | shasum -a 256 -c -
+          chmod +x staging/arm64/torrserver staging/x64/torrserver
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -56,15 +66,33 @@ jobs:
       - name: Install shell dependencies
         working-directory: desktop
         run: npm ci --ignore-scripts
-      - name: Build dmg + zip
+      - name: Build dmg + zip (arm64)
         working-directory: desktop
-        run: npx electron-builder --mac dmg zip --arm64 --publish never
+        run: |
+          set -euo pipefail
+          rm -rf ../bin && mkdir -p ../bin
+          cp ../staging/arm64/crispy-companion ../staging/arm64/torrserver ../bin/
+          npx electron-builder --mac dmg zip --arm64 --publish never
+      - name: Build dmg + zip (x64)
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          rm -rf ../bin && mkdir -p ../bin
+          cp ../staging/x64/crispy-companion ../staging/x64/torrserver ../bin/
+          npx electron-builder --mac dmg zip --x64 --publish never
       - uses: actions/upload-artifact@v7
         with:
           name: crispy-desktop-macos-arm64
           path: |
-            desktop/dist/*.dmg
-            desktop/dist/*.zip
+            desktop/dist/*-mac-arm64.dmg
+            desktop/dist/*-mac-arm64.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: crispy-desktop-macos-x64
+          path: |
+            desktop/dist/*-mac-x64.dmg
+            desktop/dist/*-mac-x64.zip
           if-no-files-found: error
 
   release:

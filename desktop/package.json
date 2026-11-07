@@ -15,7 +15,7 @@
     "dist": "electron-builder",
     "dist:linux": "electron-builder --linux AppImage",
     "dist:win": "electron-builder --win nsis",
-    "dist:mac": "electron-builder --mac dmg zip --arm64"
+    "dist:mac": "electron-builder --mac dmg zip --arm64 --x64 --publish never"
   },
   "dependencies": {
     "electron-updater": "^6.3.0"
@@ -79,7 +79,7 @@
         "zip"
       ],
       "minimumSystemVersion": "13.0",
-      "artifactName": "${productName}-${version}-mac-arm64.${ext}",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "extendInfo": {
         "CFBundleURLTypes": [
           {

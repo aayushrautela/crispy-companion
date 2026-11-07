@@ -102,12 +102,15 @@ The companion binary is bundled via `build.extraResources` from the repo
 - **Windows**: `npm run dist:win` → NSIS installer (`Crispy-Setup-…exe`),
   per-user install. electron-updater needs a `publish` provider configured
   before auto-update works (add to `build.publish` at release time).
-- **macOS**: arm64 only (GitHub `macos-latest` runners are arm64; Intel x64
-  runners are large/paid). Built in CI by `.github/workflows/desktop-macos.yml`
-  on `macos-latest` → `Crispy-…-mac-arm64.dmg` + `.zip` (zip feeds
-  electron-updater). Locally: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 make build`,
-  fetch the pinned `TorrServer-darwin-arm64` into `bin/torrserver`, then
-  `npm run dist:mac`. Electron 45 requires **macOS 13+**; `minimumSystemVersion`
+- **macOS**: **arm64 and x64** (Intel). GitHub's free `macos-latest` runner is
+  Apple Silicon, so the Intel build is cross-built from it; built in CI by
+  `.github/workflows/desktop-macos.yml` → `Crispy-…-mac-arm64.dmg` + `.zip` and
+  `Crispy-…-mac-x64.dmg` + `.zip` (zip feeds electron-updater). The cross-built
+  x64 app cannot be smoke-tested on the runner. Locally:
+  `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 make build` (and `GOARCH=amd64` for
+  Intel), fetch the matching pinned `TorrServer-darwin-arm64` /
+  `TorrServer-darwin-amd64` into `bin/torrserver`, then `npm run dist:mac`.
+  Electron 45 requires **macOS 13+**; `minimumSystemVersion`
   is pinned to `13.0` in `package.json`. `magnet:` links are registered via
   `CFBundleURLTypes` in `build.mac.extendInfo`. Unsigned by default
   (`CSC_IDENTITY_AUTO_DISCOVERY=false`); for distribution set repo variable
