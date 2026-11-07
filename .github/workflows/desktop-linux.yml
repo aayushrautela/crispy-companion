@@ -73,7 +73,7 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - run: cd desktop && npm ci --ignore-scripts
-      - run: cd desktop && npx electron-builder --linux AppImage
+      - run: cd desktop && npx electron-builder --linux AppImage --publish never
       - uses: actions/upload-artifact@v7
         with:
           name: crispy-desktop-appimage-x86_64

@@ -58,7 +58,7 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Build dmg + zip
         working-directory: desktop
-        run: npx electron-builder --mac dmg zip --arm64
+        run: npx electron-builder --mac dmg zip --arm64 --publish never
       - uses: actions/upload-artifact@v7
         with:
           name: crispy-desktop-macos-arm64
