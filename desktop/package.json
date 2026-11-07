@@ -15,7 +15,7 @@
     "dist": "electron-builder",
     "dist:linux": "electron-builder --linux AppImage",
     "dist:win": "electron-builder --win nsis",
-    "dist:mac": "electron-builder --mac dmg zip"
+    "dist:mac": "electron-builder --mac dmg zip --arm64"
   },
   "dependencies": {
     "electron-updater": "^6.3.0"
@@ -77,9 +77,6 @@
       "target": [
         "dmg",
         "zip"
-      ],
-      "arch": [
-        "arm64"
       ],
       "minimumSystemVersion": "13.0",
       "artifactName": "${productName}-${version}-mac-arm64.${ext}",
