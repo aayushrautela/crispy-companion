@@ -15,7 +15,7 @@
     "dist": "electron-builder",
     "dist:linux": "electron-builder --linux AppImage",
     "dist:win": "electron-builder --win nsis",
-    "dist:mac": "electron-builder --mac dmg"
+    "dist:mac": "electron-builder --mac dmg zip"
   },
   "dependencies": {
     "electron-updater": "^6.3.0"
@@ -35,13 +35,22 @@
       "src/**/*",
       "package.json"
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "aayushrautela",
+        "repo": "crispy-companion"
+      }
+    ],
     "extraResources": [
       {
         "from": "../bin",
         "to": "bin",
         "filter": [
           "crispy-companion",
-          "crispy-companion.exe"
+          "crispy-companion.exe",
+          "torrserver",
+          "torrserver.exe"
         ]
       }
     ],
@@ -66,8 +75,25 @@
     "mac": {
       "category": "public.app-category.video",
       "target": [
-        "dmg"
-      ]
+        "dmg",
+        "zip"
+      ],
+      "arch": [
+        "arm64"
+      ],
+      "minimumSystemVersion": "13.0",
+      "artifactName": "${productName}-${version}-mac-arm64.${ext}",
+      "extendInfo": {
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLName": "Magnet link",
+            "CFBundleURLSchemes": [
+              "magnet"
+            ],
+            "LSHandlerRank": "Owner"
+          }
+        ]
+      }
     }
   }
 }

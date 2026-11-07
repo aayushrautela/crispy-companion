@@ -102,8 +102,18 @@ The companion binary is bundled via `build.extraResources` from the repo
 - **Windows**: `npm run dist:win` → NSIS installer (`Crispy-Setup-…exe`),
   per-user install. electron-updater needs a `publish` provider configured
   before auto-update works (add to `build.publish` at release time).
-- **macOS**: `npm run dist:mac` → DMG. Notarization via `notarytool` to be
-  wired in CI.
+- **macOS**: arm64 only (GitHub `macos-latest` runners are arm64; Intel x64
+  runners are large/paid). Built in CI by `.github/workflows/desktop-macos.yml`
+  on `macos-latest` → `Crispy-…-mac-arm64.dmg` + `.zip` (zip feeds
+  electron-updater). Locally: `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 make build`,
+  fetch the pinned `TorrServer-darwin-arm64` into `bin/torrserver`, then
+  `npm run dist:mac`. Electron 45 requires **macOS 13+**; `minimumSystemVersion`
+  is pinned to `13.0` in `package.json`. `magnet:` links are registered via
+  `CFBundleURLTypes` in `build.mac.extendInfo`. Unsigned by default
+  (`CSC_IDENTITY_AUTO_DISCOVERY=false`); for distribution set repo variable
+  `MAC_SIGNING=1` plus secrets `APPLE_TEAM_ID`, `APPLE_ID`,
+  `APPLE_APP_SPECIFIC_PASSWORD` — electron-builder then signs, notarizes via
+  `notarytool`, and staples automatically.
 - **Linux**: primary format is the **Flatpak** (below); AppImage via
   `npm run dist:linux` for non-Flatpak users.
 
@@ -135,8 +145,10 @@ URLs through portals).
 
 ## Open product decisions (not wired yet)
 
-- Close-window behavior: currently **quit**. Minimize-to-tray and
-  login-autostart of the desktop app itself (Background portal entry with
-  `Exec=flatpak run io.crispy.Crispy`) are follow-ups.
+- Close-window behavior: **quit** on Windows/Linux; on macOS the window close
+  keeps the app running until Cmd+Q (platform convention, `activate` re-opens
+  the window). Minimize-to-tray and login-autostart of the desktop app itself
+  (Background portal entry with `Exec=flatpak run io.crispy.Crispy`) are
+  follow-ups.
 - The daemon still arranges its own login autostart; the desktop app
   ping-first reuse makes that harmless (one daemon, whichever started first).

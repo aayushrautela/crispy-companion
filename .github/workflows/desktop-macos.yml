@@ -1,0 +1,83 @@
+# Builds the macOS desktop app (dmg + zip, arm64) on a macOS runner and
+# attaches the artifacts to tagged releases (v*). electron-builder can only
+# sign/notarize mac targets on macOS; unsigned artifacts are produced unless
+# the APPLE_* / CSC_* secrets are configured (see desktop/README.md).
+name: Desktop (macOS)
+
+on:
+  push:
+    branches: [main, native-build]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # release job needs this to attach artifacts
+
+jobs:
+  dmg:
+    name: dmg + zip (arm64)
+    runs-on: macos-latest # macos-26 arm64
+    env:
+      TORRSERVER_VERSION: MatriX.146.1
+      TORRSERVER_SHA_ARM64: a9995fe6f9a2766d8db1fe3ab2e201108fb787c27563831307d4d2e9d29b6fb7
+      # Unsigned by default; set repo variable MAC_SIGNING=1 (plus APPLE_*
+      # secrets) to sign + notarize with a Developer ID.
+      CSC_IDENTITY_AUTO_DISCOVERY: ${{ vars.MAC_SIGNING == '1' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Inject deployment defaults
+        # Same secrets as the Linux/Flatpak builds: release builds phone home
+        # to our server and trust our web origin out of the box. Fork/PR
+        # builds keep fail-closed OSS defaults.
+        env:
+          CRISPY_SERVER_URL: ${{ secrets.CRISPY_SERVER_URL }}
+          CRISPY_ALLOWED_ORIGINS: ${{ secrets.CRISPY_ALLOWED_ORIGINS }}
+          CRISPY_WEBAPP_URL: ${{ secrets.CRISPY_WEBAPP_URL }}
+        run: bash scripts/builddefaults.sh
+      - name: Build companion (darwin arm64)
+        run: GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 make build
+      - name: Fetch pinned TorrServer engine (darwin arm64)
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          curl -fsSLo bin/torrserver "https://github.com/YouROK/TorrServer/releases/download/$TORRSERVER_VERSION/TorrServer-darwin-arm64"
+          echo "$TORRSERVER_SHA_ARM64  bin/torrserver" | shasum -a 256 -c -
+          chmod +x bin/torrserver
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install shell dependencies
+        working-directory: desktop
+        run: npm ci --ignore-scripts
+      - name: Build dmg + zip
+        working-directory: desktop
+        run: npx electron-builder --mac dmg zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: crispy-desktop-macos-arm64
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Attach artifacts to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: dmg
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: crispy-desktop-*
+          merge-multiple: true
+          path: release-artifacts
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: release-artifacts/**/*

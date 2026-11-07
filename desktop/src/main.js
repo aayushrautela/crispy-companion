@@ -318,7 +318,9 @@ if (!gotLock) {
   });
 
   app.on('window-all-closed', () => {
-    app.quit();
+    // macOS convention: closing the window keeps the app (and the companion)
+    // running until Cmd+Q; 'activate' above re-creates the window.
+    if (process.platform !== 'darwin') app.quit();
   });
 
   app.on('activate', () => {
