@@ -59,12 +59,14 @@
       "target": [
         "AppImage"
       ],
+      "icon": "build/icon.png",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "win": {
       "target": [
         "nsis"
       ],
+      "icon": "build/icon.png",
       "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
     },
     "nsis": {
@@ -79,6 +81,7 @@
         "zip"
       ],
       "minimumSystemVersion": "13.0",
+      "icon": "build/icon.png",
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "extendInfo": {
         "CFBundleURLTypes": [

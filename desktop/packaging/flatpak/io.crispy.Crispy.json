@@ -140,8 +140,8 @@
                 "install -Dm755 desktop/packaging/flatpak/crispy /app/bin/crispy",
                 "install -Dm644 desktop/packaging/flatpak/io.crispy.Crispy.desktop /app/share/applications/io.crispy.Crispy.desktop",
                 "install -Dm644 desktop/packaging/flatpak/io.crispy.Crispy.metainfo.xml /app/share/metainfo/io.crispy.Crispy.metainfo.xml",
-                "install -Dm644 packaging/flatpak/io.crispy.Companion.svg /app/share/icons/hicolor/scalable/apps/io.crispy.Crispy.svg",
-                "for f in packaging/flatpak/icons/*/io.crispy.Companion.png; do [ -e \"$f\" ] || continue; s=$(basename \"$(dirname \"$f\")\"); install -Dm644 \"$f\" \"/app/share/icons/hicolor/$s/apps/io.crispy.Crispy.png\"; done"
+                "install -Dm644 desktop/packaging/flatpak/io.crispy.Crispy.svg /app/share/icons/hicolor/scalable/apps/io.crispy.Crispy.svg",
+                "for f in desktop/packaging/flatpak/icons/*/io.crispy.Crispy.png; do [ -e \"$f\" ] || continue; s=$(basename \"$(dirname \"$f\")\"); install -Dm644 \"$f\" \"/app/share/icons/hicolor/$s/apps/io.crispy.Crispy.png\"; done"
             ],
             "sources": [
                 {
