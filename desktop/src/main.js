@@ -217,6 +217,28 @@ function registerMagnetScheme() {
   }
 }
 
+// --- hard refresh ------------------------------------------------------------
+//
+// On demand only (Ctrl+Shift+R / Cmd+Shift+R): the PWA service worker keeps
+// serving its precached bundle from the persisted Chromium profile, so a
+// normal reload never picks up a new web build. This wipes the service
+// worker registrations and Cache Storage plus the HTTP cache, then reloads
+// ignoring whatever cache remains. IndexedDB/localStorage/cookies are not in
+// the storages list, so app data (profiles, auth, crispy-db) survives.
+
+async function hardRefresh() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const ses = mainWindow.webContents.session;
+  log('hard refresh: clearing service workers, caches, HTTP cache');
+  try {
+    await ses.clearStorageData({ storages: ['serviceworkers', 'caches'] });
+    await ses.clearCache();
+  } catch (err) {
+    log('hard refresh: cache clear failed:', err.message);
+  }
+  mainWindow.webContents.reloadIgnoringCache();
+}
+
 // --- window ------------------------------------------------------------------
 
 function createWindow(webappURL) {
@@ -256,6 +278,17 @@ function createWindow(webappURL) {
   mainWindow.webContents.on('did-finish-load', () => {
     const queued = pendingMagnets.splice(0);
     for (const m of queued) deliverMagnet(m);
+  });
+
+  // Ctrl+Shift+R / Cmd+Shift+R hard refresh. The application menu is hidden
+  // on win/linux (set to null at startup), so the shortcut is caught here
+  // rather than via a menu accelerator.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    if (input.key.toLowerCase() === 'r' && input.shift && (input.control || input.meta)) {
+      event.preventDefault();
+      hardRefresh();
+    }
   });
 
   mainWindow.on('closed', () => {
