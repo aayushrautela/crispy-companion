@@ -26,9 +26,9 @@
 ; nothing survives an uninstall.
 ;
 ; Build (CI passes the version, the staging dir and the output name):
-;   makensis /NOCD -DVERSION=0.1.0 -DOUTFILE=setup.exe \
+;   makensis -NOCD -DVERSION=0.1.0 -DOUTFILE=setup.exe \
 ;            packaging/windows/crispy-companion.nsi
-; /NOCD is required: makensis changes its own working directory to this
+; -NOCD is required: makensis changes its own working directory to this
 ; script's folder by default, and every ${__FILEDIR__} path below is
 ; relative to the repository root (where the staging drop-in lives).
 ; Without -DSTAGEDIR the three payload files are expected in a "stage"

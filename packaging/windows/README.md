@@ -36,7 +36,7 @@ seeds a copy once, on first install only, and never overwrites an edited one.
 `CRISPY_SERVER_URL`, or through a build that carries deployment defaults.
 
 Build by hand — staging goes into `packaging/windows/stage`, the .nsi's
-default `STAGEDIR`. The `/NOCD` switch matters: makensis otherwise changes
+default `STAGEDIR`. The `-NOCD` switch matters: makensis otherwise changes
 its working directory to the script's folder, and the script's payload,
 icon and `LICENSE` paths are relative to the repository root:
 

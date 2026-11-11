@@ -149,7 +149,7 @@ jobs:
           # makensis cds into packaging/windows and every path doubles.
           # -DSTAGEDIR defaults to packaging/windows/stage; the version
           # resource needs three numeric fields (see the build step).
-          makensis /NOCD -DVERSION="${CRISPY_VERSION}" \
+          makensis -NOCD -DVERSION="${CRISPY_VERSION}" \
                    -DOUTFILE=crispy-companion-windows-amd64-setup.exe \
                    packaging/windows/crispy-companion.nsi
           test -f crispy-companion-windows-amd64-setup.exe
