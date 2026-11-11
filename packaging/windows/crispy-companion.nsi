@@ -1,8 +1,8 @@
-; crispy-companion.nsi — Windows installer for the Crispy Companion daemon.
+; crispy-companion.nsi -- Windows installer for the Crispy Companion daemon.
 ;
 ; Per-user by design: the daemon is loopback-only and everything it owns
 ; lives inside the user's own profile, so there is nothing to elevate for.
-; RequestExecutionLevel user keeps it that way — no UAC prompt, and it can
+; RequestExecutionLevel user keeps it that way -- no UAC prompt, and it can
 ; install on a locked-down workstation.
 ;
 ; What it lays down (see packaging/windows/README.md):
@@ -15,7 +15,7 @@
 ;       uninstall.exe
 ;   %LOCALAPPDATA%\Crispy Companion\
 ;       the daemon's data dir (tokens, pairing state, engine cache) and the
-;       seed config's home — the daemon creates it itself as well
+;       seed config's home -- the daemon creates it itself as well
 ;   Start Menu\Programs\Crispy Companion.lnk
 ;       --menu-launch entry: the headless daemon's only window
 ;
@@ -61,7 +61,7 @@ ManifestDPIAware true
 !endif
 
 ; The registry keys this installer owns. The uninstall key is the one
-; Windows itself reads for Settings → Apps → Installed apps, so the entry
+; Windows itself reads for Settings -> Apps -> Installed apps, so the entry
 ; and its uninstaller stay discoverable like any other per-user install.
 !define INSTALLKEY "Software\${APPNAME}"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
@@ -85,13 +85,13 @@ SetCompressor /SOLID lzma
 ; Three numeric fields: CI passes -DVERSION=0.1.0, anything with letters in
 ; it (a sha, "-dirty", a pre-release suffix) is rejected here.
 VIProductVersion ${VERSION}.0
-VIAddVersionInfo /LANG=1033 "ProductName" "${APPNAME}"
-VIAddVersionInfo /LANG=1033 "FileDescription" "${APPNAME} setup"
-VIAddVersionInfo /LANG=1033 "CompanyName" "${COMPANYNAME}"
-VIAddVersionInfo /LANG=1033 "FileVersion" "${VERSION}"
-VIAddVersionInfo /LANG=1033 "ProductVersion" "${VERSION}"
-VIAddVersionInfo /LANG=1033 "LegalCopyright" "GPL-3.0-only"
-VIAddVersionInfo /LANG=1033 "OriginalFilename" "${OUTFILE}"
+VIAddVersionKey "ProductName" "${APPNAME}"
+VIAddVersionKey "FileDescription" "${APPNAME} setup"
+VIAddVersionKey "CompanyName" "${COMPANYNAME}"
+VIAddVersionKey "FileVersion" "${VERSION}"
+VIAddVersionKey "ProductVersion" "${VERSION}"
+VIAddVersionKey "LegalCopyright" "GPL-3.0-only"
+VIAddVersionKey "OriginalFilename" "${OUTFILE}"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
