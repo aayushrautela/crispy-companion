@@ -232,10 +232,16 @@ jobs:
             Write-Output '::error::the Programs entry was not written'; exit 1
           }
           if (-not (Test-Path (Join-Path $data 'config.toml'))) { Write-Output '::error::the seed config did not reach the data dir'; exit 1 }
-          # The Run value is read with GetValue, not Get-ItemProperty: a value
-          # that does not exist still yields a truthy property object.
-          $runItem = Get-Item -Path $runKey -ErrorAction SilentlyContinue
-          if ($null -ne $runItem.GetValue('Crispy Companion')) {
+          # Get-ItemProperty cannot be used here: a value that does not exist
+          # still yields a truthy property object. And on a pristine runner the
+          # Run key itself does not exist until the daemon writes it, so both
+          # the key and the value are read defensively.
+          function Get-AutostartValue {
+            $key = Get-Item -Path $runKey -ErrorAction SilentlyContinue
+            if ($null -eq $key) { return $null }
+            return $key.GetValue('Crispy Companion')
+          }
+          if ($null -ne (Get-AutostartValue)) {
             Write-Output '::error::the installer wrote autostart, which is the daemon''s job'; exit 1
           }
 
@@ -250,8 +256,8 @@ jobs:
           }
           if (-not $served) { taskkill /F /IM crispy-companion.exe 2>$null | Out-Null; Write-Output '::error::the installed daemon never answered the ping'; exit 1 }
           Start-Sleep -Seconds 3
-          $run = $runItem.GetValue('Crispy Companion')
-          if (-not ($run -like '*--autostart-run*')) { Write-Output '::error::the installed daemon did not write the HKCU Run value'; exit 1 }
+          $run = Get-AutostartValue
+          if ($run -notlike '*--autostart-run*') { Write-Output '::error::the installed daemon did not write the HKCU Run value'; exit 1 }
           taskkill /F /IM crispy-companion.exe 2>$null | Out-Null
           taskkill /F /IM torrserver.exe 2>$null | Out-Null
 
@@ -263,9 +269,9 @@ jobs:
           }
           if (Test-Path $link) { Write-Output '::error::the Start Menu entry survived the uninstall'; exit 1 }
           if ($null -ne (Get-Item -Path $uninstKey -ErrorAction SilentlyContinue)) { Write-Output '::error::the Programs entry survived the uninstall'; exit 1 }
-          # Re-read: the variables above were captured before the uninstall.
-          $runAfter = Get-Item -Path $runKey -ErrorAction SilentlyContinue
-          if ($null -ne $runAfter.GetValue('Crispy Companion')) { Write-Output '::error::the autostart Run value survived the uninstall'; exit 1 }
+          # Re-read: the values above were captured before the uninstall, and
+          # the Run key the daemon created is gone again by now.
+          if ($null -ne (Get-AutostartValue)) { Write-Output '::error::the autostart Run value survived the uninstall'; exit 1 }
           if (Test-Path $data) { Write-Output '::error::the data dir survived the uninstall'; exit 1 }
           Write-Output 'install, daemon, autostart and uninstall all verified'
 
