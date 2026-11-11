@@ -1,7 +1,7 @@
 package autostart
 
 import (
-	"path/filepath"
+	"path"
 	"strings"
 )
 
@@ -52,7 +52,9 @@ func desktopExecArg(path string) string {
 // LaunchAgentPlist renders the macOS LaunchAgent. logDir receives the
 // daemon's stdout/stderr, matching packaging/macos/io.crispy.Companion.plist.
 func LaunchAgentPlist(exePath, logDir string) string {
-	dir := filepath.Dir(exePath)
+	// The plist is an Apple format: its paths are always POSIX, so use
+	// path (not filepath, which would emit backslashes on Windows).
+	dir := path.Dir(exePath)
 	// WorkingDirectory so a relative engine.binaryPath ("torrserver" in
 	// the tarball next to the binary) is found the same way as in a
 	// terminal launch — launchd starts agents with CWD "/".
@@ -70,8 +72,8 @@ func LaunchAgentPlist(exePath, logDir string) string {
 	b.WriteString("    <key>RunAtLoad</key>\n    <true/>\n")
 	b.WriteString("    <key>KeepAlive</key>\n    <true/>\n")
 	keyString(&b, "WorkingDirectory", dir)
-	keyString(&b, "StandardOutPath", filepath.Join(logDir, "crispy-companion.log"))
-	keyString(&b, "StandardErrorPath", filepath.Join(logDir, "crispy-companion.err.log"))
+	keyString(&b, "StandardOutPath", path.Join(logDir, "crispy-companion.log"))
+	keyString(&b, "StandardErrorPath", path.Join(logDir, "crispy-companion.err.log"))
 	b.WriteString("</dict>\n</plist>\n")
 	return b.String()
 }

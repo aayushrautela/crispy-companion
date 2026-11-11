@@ -127,8 +127,12 @@ jobs:
           }
           # The registration happens right after the listeners come up.
           sleep 3
-          reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Crispy Companion" \
-            | grep -q -- "--autostart-run" || { echo "::error::the Run value was not written"; exit 1; }
+          # Read the value through PowerShell: reg.exe's /v switch is a bare
+          # slash option, and Git bash rewrites those into Windows paths (the
+          # same reason the taskkill calls above go through cmd //c).
+          run_data="$(powershell -NoProfile -Command "(Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Crispy Companion').'Crispy Companion'" 2>/dev/null || true)"
+          echo "Run value: ${run_data}"
+          grep -q -- "--autostart-run" <<<"$run_data" || { echo "::error::the Run value was not written"; exit 1; }
           grep -q '"enabled": true' "$data/autostart.json" || { echo "::error::autostart.json does not record the registration"; exit 1; }
           # Force-kill: Windows has no SIGTERM for this smoke test, and the
           # engine would otherwise keep running behind a dead daemon.
