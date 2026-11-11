@@ -1,0 +1,183 @@
+# Builds the Crispy companion daemon for Windows on every push/PR and
+# attaches the installer and the no-installer zip to tagged releases (v*),
+# mirroring packaging/windows/README.md:
+#
+#   crispy-companion.exe   the daemon (Go, no cgo)
+#   torrserver.exe         pinned MatriX.146.1 artefact, sha256-checked
+#   crispy-companion-windows-amd64-setup.exe
+#                           per-user NSIS installer (no admin): payload,
+#                           Start Menu entry, seed config, uninstaller
+#   crispy-companion-windows-amd64.zip
+#                           the same files for a folder install without one
+#
+# This is the first platform workflow that actually runs the daemon on its
+# target OS: the tests and the smoke test run on a Windows runner, and the
+# smoke test proves the HKCU autostart registration end to end (the same
+# thing the macOS smoke test proves for the LaunchAgent).
+
+name: Windows
+
+on:
+  push:
+    branches: [main, microslop-windows]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # release job needs this to attach artifacts
+
+jobs:
+  test:
+    name: Go tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./...
+
+  build:
+    name: companion, engine, installer
+    needs: test
+    runs-on: windows-latest
+    env:
+      TORRSERVER_VERSION: MatriX.146.1
+      TORRSERVER_SHA_AMD64: ac2bbda1d89230739306ae733fd29777b2fceb7f560702fca96b757ab267c2ff
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Inject deployment defaults
+        # Same secrets as the other builds: release installers phone home to
+        # our server and trust our web origin out of the box. Fork/PR builds
+        # keep fail-closed OSS defaults.
+        env:
+          CRISPY_SERVER_URL: ${{ secrets.CRISPY_SERVER_URL }}
+          CRISPY_ALLOWED_ORIGINS: ${{ secrets.CRISPY_ALLOWED_ORIGINS }}
+          CRISPY_WEBAPP_URL: ${{ secrets.CRISPY_WEBAPP_URL }}
+        run: bash scripts/builddefaults.sh
+      - name: Build the companion
+        # windows-latest runs pwsh unless a step says otherwise, and every
+        # bash-flavoured step below states it.
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)"
+          ldflags="-s -w -X github.com/crispy-streaming/crispy-companion/internal/server.Version=$version"
+          # The installer's version resource takes three numeric fields only,
+          # so a tag like v0.1.0 (or v1.2.3-rc1) gives 0.1.0 / 1.2.3 and
+          # everything else (branches, PRs, shas) keeps the 0.1.0 fallback.
+          if [[ "${GITHUB_REF_NAME:-}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+            echo "CRISPY_VERSION=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}" >> "$GITHUB_ENV"
+          else
+            echo "CRISPY_VERSION=0.1.0" >> "$GITHUB_ENV"
+          fi
+          CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o crispy-companion.exe ./cmd/crispy-companion
+      - name: Fetch the pinned TorrServer engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/YouROK/TorrServer/releases/download/$TORRSERVER_VERSION"
+          curl -fsSLo torrserver.exe "$base/TorrServer-windows-amd64.exe"
+          echo "$TORRSERVER_SHA_AMD64  torrserver.exe" | sha256sum -c -
+      - name: Stage the payload
+        # The installer picks its files up from packaging/windows/stage, the
+        # default staging dir baked into the .nsi.
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packaging/windows/stage/icons
+          cp crispy-companion.exe packaging/windows/stage/
+          cp torrserver.exe packaging/windows/stage/
+          cp packaging/windows/config.toml packaging/windows/stage/
+          cp packaging/windows/icons/crispy-companion.ico packaging/windows/stage/icons/
+      - name: Smoke-run the daemon on Windows (autostart registration)
+        # Proves the Windows path end to end on a real Windows host: the
+        # daemon writes the HKCU Run value itself via reg.exe, pointing at
+        # its own exe plus --autostart-run, and records the outcome in
+        # autostart.json. Run from the staging dir so torrserver.exe is
+        # found next to the binary, exactly as the installer ships them.
+        shell: bash
+        run: |
+          set -euo pipefail
+          data="$RUNNER_TEMP/crispy-winsmoke"
+          CRISPY_COMPANION_DATA_DIR="$data" packaging/windows/stage/crispy-companion.exe &
+          served=""
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:11470/companion/ping >/dev/null 2>&1; then
+              served=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$served" ]; then
+            echo "::error::the daemon never answered /companion/ping"
+            cmd //c "taskkill /F /IM crispy-companion.exe" || true
+            exit 1
+          fi
+          curl -fsS http://127.0.0.1:11470/companion/ping | grep -q '"name":"crispy-companion"' || {
+            echo "::error::/companion/ping did not answer as crispy-companion"
+            exit 1
+          }
+          # The registration happens right after the listeners come up.
+          sleep 3
+          reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Crispy Companion" \
+            | grep -q -- "--autostart-run" || { echo "::error::the Run value was not written"; exit 1; }
+          grep -q '"enabled": true' "$data/autostart.json" || { echo "::error::autostart.json does not record the registration"; exit 1; }
+          # Force-kill: Windows has no SIGTERM for this smoke test, and the
+          # engine would otherwise keep running behind a dead daemon.
+          cmd //c "taskkill /F /IM crispy-companion.exe" || true
+          cmd //c "taskkill /F /IM torrserver.exe" || true
+      - name: Build the installer (NSIS, per-user)
+        uses: nsis-dev/setup-nsis@v1
+      - name: Compile the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          # -DSTAGEDIR defaults to packaging/windows/stage; the version
+          # resource needs three numeric fields (see the build step).
+          makensis -DVERSION="${CRISPY_VERSION}" \
+                   -DOUTFILE=crispy-companion-windows-amd64-setup.exe \
+                   packaging/windows/crispy-companion.nsi
+          test -f crispy-companion-windows-amd64-setup.exe
+      - name: Zip the no-installer layout
+        # Flat like the installer's install dir: staging keeps the icon in an
+        # icons\ subfolder, so the zip is built from a flat copy rather than
+        # compressing the staging tree as-is.
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "crispy-zip"
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          Copy-Item crispy-companion.exe $root
+          Copy-Item packaging\windows\stage\torrserver.exe $root
+          Copy-Item packaging\windows\stage\config.toml $root
+          Copy-Item packaging\windows\stage\icons\crispy-companion.ico $root
+          Copy-Item LICENSE "$root\LICENSE.txt"
+          Copy-Item packaging\windows\README.md $root
+          Compress-Archive -Path "$root\*" -DestinationPath crispy-companion-windows-amd64.zip -Force
+      - uses: actions/upload-artifact@v7
+        with:
+          name: crispy-companion-windows
+          path: |
+            crispy-companion-windows-amd64-setup.exe
+            crispy-companion-windows-amd64.zip
+
+  release:
+    name: Attach artifacts to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: crispy-companion-windows-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: crispy-companion-windows-*

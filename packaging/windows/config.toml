@@ -1,0 +1,27 @@
+# Crispy Companion — seed configuration (Windows).
+#
+# The installer copies this file into the data dir on first run:
+#   %LOCALAPPDATA%\Crispy Companion\config.toml
+# It never overwrites an existing one, so edits survive upgrades. Point
+# CRISPY_COMPANION_CONFIG elsewhere if you prefer to keep it elsewhere.
+#
+# Every value below is the built-in default; keep only what you change.
+# crispyServer.url stays empty: pairing is disabled until you set it here,
+# in CRISPY_SERVER_URL, or through a build that carries deployment
+# defaults. The listener and the engine stay loopback-only.
+
+[listen]
+addr = "127.0.0.1"
+port = 11470
+
+[engine]
+addr = "127.0.0.1"
+port = 8090
+autoStart = true
+binaryPath = "torrserver"
+
+[crispyServer]
+url = ""
+
+[logging]
+level = "info"

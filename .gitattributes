@@ -1,0 +1,5 @@
+# Keep shell scripts and NSIS scripts LF: the Windows workflow runs the
+# .sh files through bash, which chokes on CR, and CRLF in a .nsi makes
+# every line of a diff dirty on Linux/macOS.
+*.sh text eol=lf
+*.nsi text eol=lf

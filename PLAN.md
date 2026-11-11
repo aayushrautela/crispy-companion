@@ -363,8 +363,9 @@ Env overrides mirror leaves (e.g., `CRISPY_COMPANION_LISTEN_PORT`).
 
 ### 12.3 Windows
 
-- Single `crispy-companion.exe` + companion updater stub; installer target is `crispy-companion-{arch}.zip` now, `MSI` later. Autostart via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (user, not `HKLM`). Toasts via `windows-toast-notifications` family (buttons required; class allows self-hosted upgrade path via `goreleaser/winget`).
-- Notarization/signature: `signtool` path reserved; verified builds note when unsigned dev path is used.
+- Single `crispy-companion.exe` + companion updater stub; ships both as the no-installer `crispy-companion-windows-amd64.zip` and as a per-user NSIS installer (`packaging/windows/crispy-companion.nsi`, built by `.github/workflows/windows.yml`). Autostart via `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (user, not `HKLM`), written by the daemon itself, never by the installer. Toasts via `windows-toast-notifications` family (buttons required; class allows self-hosted upgrade path via `goreleaser/winget`) — post-M4, needs the Start Menu entry's AppUserModelID.
+- Installer technology: NSIS, hand-written — GoReleaser's NSIS/MSI sections are Pro-only, WiX is out of community support (FireGiant maintenance fee), and a per-user MSI fits a per-user daemon badly. Per-user (`RequestExecutionLevel user`), install dir `%LOCALAPPDATA%\Programs\Crispy Companion`, data dir unchanged.
+- Notarization/signature: `signtool` path reserved; verified builds note when unsigned dev path is used. Azure Artifact Signing (ex-Trusted Signing) is the CI-friendly route when it is worth ~$10/mo.
 
 ### 12.4 macOS
 
