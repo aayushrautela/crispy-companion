@@ -10,6 +10,11 @@
 #   crispy-companion-windows-amd64.zip
 #                           the same files for a folder install without one
 #
+# The setup.exe is then exercised for real: a third job installs it silently
+# on a clean Windows runner, checks exactly what it laid down, starts the
+# installed daemon, and uninstalls it again. Compiling an installer proves
+# nothing about whether it installs.
+#
 # This is the first platform workflow that actually runs the daemon on its
 # target OS: the tests and the smoke test run on a Windows runner, and the
 # smoke test proves the HKCU autostart registration end to end (the same
@@ -174,6 +179,95 @@ jobs:
           path: |
             crispy-companion-windows-amd64-setup.exe
             crispy-companion-windows-amd64.zip
+
+  install-test:
+    name: Install and uninstall the installer
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Download the artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: crispy-companion-windows
+          path: installer
+      - name: Check the no-installer zip layout
+        # The zip is the documented "just extract it" fallback, so its file
+        # list is part of the release contract, not an implementation detail.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:GITHUB_WORKSPACE 'installer\crispy-companion-windows-amd64.zip'
+          $out = Join-Path $env:RUNNER_TEMP 'crispy-zip'
+          Expand-Archive -Path $zip -DestinationPath $out -Force
+          foreach ($f in 'crispy-companion.exe', 'torrserver.exe', 'config.toml', 'crispy-companion.ico', 'LICENSE.txt', 'README.md') {
+            if (-not (Test-Path (Join-Path $out $f))) { Write-Output "::error::the zip is missing $f"; exit 1 }
+          }
+          Write-Output 'zip layout is flat and complete'
+      - name: Install, verify, uninstall, verify
+        # PowerShell, not bash: the silent switches are slash-prefixed and Git
+        # bash would rewrite them into Windows paths (the trap the smoke test
+        # hit with reg.exe /v). /S is NSIS silent mode, and both the installer
+        # and the uninstaller take it.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $env:GITHUB_WORKSPACE 'installer\crispy-companion-windows-amd64-setup.exe'
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Crispy Companion'
+          $data = Join-Path $env:LOCALAPPDATA 'Crispy Companion'
+          $link = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Crispy Companion.lnk'
+          $uninstKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Crispy Companion'
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $exe = Join-Path $dir 'crispy-companion.exe'
+
+          $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Output "::error::the installer exited $($p.ExitCode)"; exit 1 }
+
+          # What the installer is documented to lay down, and nothing else.
+          foreach ($f in 'crispy-companion.exe', 'torrserver.exe', 'config.toml', 'crispy-companion.ico', 'LICENSE.txt', 'uninstall.exe') {
+            if (-not (Test-Path (Join-Path $dir $f))) { Write-Output "::error::installed file is missing: $f"; exit 1 }
+          }
+          if (-not (Test-Path $link)) { Write-Output '::error::the Start Menu entry was not created'; exit 1 }
+          $uninstItem = Get-Item -Path $uninstKey -ErrorAction SilentlyContinue
+          if ($null -eq $uninstItem -or $uninstItem.GetValue('DisplayName') -ne 'Crispy Companion') {
+            Write-Output '::error::the Programs entry was not written'; exit 1
+          }
+          if (-not (Test-Path (Join-Path $data 'config.toml'))) { Write-Output '::error::the seed config did not reach the data dir'; exit 1 }
+          # The Run value is read with GetValue, not Get-ItemProperty: a value
+          # that does not exist still yields a truthy property object.
+          $runItem = Get-Item -Path $runKey -ErrorAction SilentlyContinue
+          if ($null -ne $runItem.GetValue('Crispy Companion')) {
+            Write-Output '::error::the installer wrote autostart, which is the daemon''s job'; exit 1
+          }
+
+          # The installed binary must serve, and register its own autostart --
+          # the same thing the smoke test proves for the staged copy.
+          $env:CRISPY_COMPANION_DATA_DIR = $data
+          Start-Process -FilePath $exe -PassThru | Out-Null
+          $served = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep -Seconds 1
+            try { (Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:11470/companion/ping').Content | Out-Null; $served = $true; break } catch {}
+          }
+          if (-not $served) { taskkill /F /IM crispy-companion.exe 2>$null | Out-Null; Write-Output '::error::the installed daemon never answered the ping'; exit 1 }
+          Start-Sleep -Seconds 3
+          $run = $runItem.GetValue('Crispy Companion')
+          if (-not ($run -like '*--autostart-run*')) { Write-Output '::error::the installed daemon did not write the HKCU Run value'; exit 1 }
+          taskkill /F /IM crispy-companion.exe 2>$null | Out-Null
+          taskkill /F /IM torrserver.exe 2>$null | Out-Null
+
+          # And nothing may survive an uninstall.
+          $u = Start-Process -FilePath (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait -PassThru
+          if ($u.ExitCode -ne 0) { Write-Output "::error::the uninstaller exited $($u.ExitCode)"; exit 1 }
+          foreach ($f in 'crispy-companion.exe', 'torrserver.exe', 'config.toml', 'crispy-companion.ico', 'LICENSE.txt', 'uninstall.exe') {
+            if (Test-Path (Join-Path $dir $f)) { Write-Output "::error::the uninstaller left $f behind"; exit 1 }
+          }
+          if (Test-Path $link) { Write-Output '::error::the Start Menu entry survived the uninstall'; exit 1 }
+          if ($null -ne (Get-Item -Path $uninstKey -ErrorAction SilentlyContinue)) { Write-Output '::error::the Programs entry survived the uninstall'; exit 1 }
+          # Re-read: the variables above were captured before the uninstall.
+          $runAfter = Get-Item -Path $runKey -ErrorAction SilentlyContinue
+          if ($null -ne $runAfter.GetValue('Crispy Companion')) { Write-Output '::error::the autostart Run value survived the uninstall'; exit 1 }
+          if (Test-Path $data) { Write-Output '::error::the data dir survived the uninstall'; exit 1 }
+          Write-Output 'install, daemon, autostart and uninstall all verified'
 
   release:
     name: Attach artifacts to release

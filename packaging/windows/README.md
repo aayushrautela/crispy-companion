@@ -41,11 +41,15 @@ its working directory to the script's folder, and the script's payload,
 icon and `LICENSE` paths are relative to the repository root:
 
 ```powershell
+New-Item -ItemType Directory -Force packaging/windows/stage | Out-Null
 $env:CGO_ENABLED = "0"
 go build -trimpath -o packaging/windows/stage/crispy-companion.exe ./cmd/crispy-companion
+# the pinned engine from the TorrServer release goes here as torrserver.exe
 Copy-Item packaging/windows/config.toml, packaging/windows/icons\crispy-companion.ico `
           -Destination packaging/windows/stage
-makensis /NOCD -DOUTFILE=crispy-companion-setup.exe packaging/windows/crispy-companion.nsi
+# -NOCD, never the slash form: Git bash rewrites a leading slash into a path
+makensis -NOCD -DVERSION=0.1.0 `
+         -DOUTFILE=crispy-companion-setup.exe packaging/windows/crispy-companion.nsi
 ```
 
 The engine is a third-party artefact, not built here: fetch the pinned one
@@ -62,6 +66,29 @@ run `crispy-companion.exe`; the daemon works the same way — the engine is
 found next to the exe, and a `config.toml` dropped into
 `%LOCALAPPDATA%\Crispy Companion` still applies. The zip is what the release
 workflow attaches next to the setup.
+
+## Trying it for real
+
+The setup runs unattended with NSIS's `/S` switch, which is how CI exercises
+it — PowerShell, not Git bash, because Git bash rewrites a leading slash into
+a path:
+
+```powershell
+Start-Process .\crispy-companion-windows-amd64-setup.exe -ArgumentList '/S' -Wait
+# what it laid down, in order
+Get-ChildItem "$env:LOCALAPPDATA\Programs\Crispy Companion"
+Get-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Crispy Companion.lnk"
+Start-Process "$env:LOCALAPPDATA\Programs\Crispy Companion\crispy-companion.exe"
+Invoke-WebRequest http://127.0.0.1:11470/companion/ping   # the daemon answers
+Start-Process "$env:LOCALAPPDATA\Programs\Crispy Companion\uninstall.exe" -ArgumentList '/S' -Wait
+```
+
+`.github/workflows/windows.yml` runs exactly that sequence on a clean
+`windows-latest` runner (job `Install and uninstall the installer`): install,
+check the files, the Start Menu entry, the Programs entry and the seed config,
+start the installed daemon and check it writes the HKCU Run value itself, then
+uninstall and check that none of it survived. The daemon writing autostart at
+install time is a bug the job fails on, since that is the daemon's job.
 
 ## Autostart (user scope only)
 
@@ -113,7 +140,9 @@ that becomes worth ~$10/month.
 ## Status
 
 Installer and CI (.github/workflows/windows.yml) build on every push/PR and
-attach the setup + zip to tagged releases. First acceptance: install on a
-Windows host, pair against the staging server, confirm the Start Menu entry
-opens the web app and the Run value starts the daemon at login. Toasts filed
-as post-M4.
+attach the setup + zip to tagged releases. The workflow also installs and
+uninstalls the setup on a clean runner and starts the installed daemon, so the
+install path is covered without a Windows host. What still needs a real
+machine: pairing against the staging server, the Start Menu entry opening the
+web app, and the Run value starting the daemon at login. Toasts filed as
+post-M4.
