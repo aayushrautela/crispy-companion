@@ -9,3 +9,9 @@ internal/config/builddefaults_gen.go
 # Desktop shell (Electron) dependencies and build output.
 desktop/node_modules/
 desktop/dist/
+
+# NSIS installer staging and output (packaging/windows/crispy-companion.nsi
+# reads its payload from packaging/windows/stage).
+packaging/windows/stage/
+crispy-companion-windows-amd64-setup.exe
+crispy-companion-windows-amd64.zip
